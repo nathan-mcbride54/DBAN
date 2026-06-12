@@ -41,7 +41,7 @@ pub const CHUNK_SIZE: usize = 4 << 20;
 pub struct WipeSpec {
     /// The overwrite scheme to apply.
     pub scheme: Scheme,
-    /// Repeat the whole scheme N times (DBAN's "rounds").
+    /// Repeat the whole scheme N times (the classic "rounds" feature).
     pub rounds: u32,
     /// Read-back verification policy.
     pub verify: VerifyMode,
@@ -382,7 +382,7 @@ impl JobHandle {
 }
 
 /// Start wiping one disk. The `ArmToken` parameter is the safety interlock:
-/// it cannot be forged outside `scour_core::safety`.
+/// it cannot be forged outside `dban_core::safety`.
 pub fn spawn_wipe(disk: &Disk, spec: &WipeSpec, _token: &ArmToken) -> Result<JobHandle, CoreError> {
     if let Some(lock) = disk.lock {
         return Err(CoreError::DiskLocked(

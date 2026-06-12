@@ -1,20 +1,20 @@
 [package]
-name = "scour"
-description = "Scour — boot-and-nuke disk sanitization appliance"
+name = "dban"
+description = "DBAN — boot-and-nuke disk sanitization appliance"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "scour"
+name = "dban"
 path = "src/lib.rs"
 
 [[bin]]
-name = "scour"
+name = "dban"
 path = "src/main.rs"
 
 [dependencies]
-scour-core = { path = "../scour-core" }
+dban-core = { path = "../dban-core" }
 ratatui = "0.29"
 
 [target.'cfg(target_os = "linux")'.dependencies]

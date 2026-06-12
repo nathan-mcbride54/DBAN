@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/scour-core", "crates/scour"]
+members = ["crates/dban-core", "crates/dban"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://example.invalid/scour"
+repository = "https://example.invalid/dban"
 
 [profile.release]
 opt-level = 3

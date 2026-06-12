@@ -72,7 +72,7 @@ pub enum LockReason {
     Mounted,
     /// A partition is in use as swap.
     SwapActive,
-    /// The disk appears to hold the running Scour boot medium.
+    /// The disk appears to hold the running DBAN boot medium.
     BootMedium,
     /// Another kernel subsystem holds the device (RAID member, dm, ...).
     InUse,

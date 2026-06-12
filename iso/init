@@ -1,9 +1,9 @@
 #!/bin/sh
-# Scour init shim — runs as PID 1 from the initramfs.
+# DBAN init shim — runs as PID 1 from the initramfs.
 #
 # We keep this tiny: mount the pseudo-filesystems the kernel and our program
 # expect, then exec the Rust binary so that it *becomes* PID 1 (inheriting the
-# reboot/poweroff responsibility). Scour itself does the rest.
+# reboot/poweroff responsibility). DBAN itself does the rest.
 #
 # This is the only shell script that runs on the appliance, and only because
 # mounting /proc, /sys, /dev before the first real program is conventionally
@@ -17,9 +17,9 @@ mount -t tmpfs    none /tmp       2>/dev/null
 # Quiet the kernel log so it doesn't scribble over the TUI.
 echo 0 > /proc/sys/kernel/printk 2>/dev/null
 
-# Hand off. `exec` makes scour PID 1; when it calls reboot(2) the machine
-# restarts cleanly. If scour ever exits without rebooting, drop to a panic
+# Hand off. `exec` makes dban PID 1; when it calls reboot(2) the machine
+# restarts cleanly. If dban ever exits without rebooting, drop to a panic
 # rather than leaving an unusable kernel.
-exec /bin/scour
-echo "scour exited unexpectedly" > /dev/console
+exec /bin/dban
+echo "dban exited unexpectedly" > /dev/console
 exec /bin/sh

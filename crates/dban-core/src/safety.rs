@@ -1,6 +1,6 @@
 //! The safety interlock.
 //!
-//! Scour is built so that *no code path can start a wipe unattended*:
+//! DBAN is built so that *no code path can start a wipe unattended*:
 //!
 //! 1. There are no CLI flags that select disks or start jobs.
 //! 2. [`crate::engine::spawn_wipe`] requires an [`ArmToken`] argument.

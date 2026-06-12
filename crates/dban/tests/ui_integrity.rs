@@ -20,11 +20,11 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use unicode_width::UnicodeWidthStr;
 
-use scour::app::{App, Screen};
-use scour::theme::Theme;
-use scour::ui;
+use dban::app::{App, Screen};
+use dban::theme::Theme;
+use dban::ui;
 
-use scour_core::demo::DemoProvider;
+use dban_core::demo::DemoProvider;
 
 fn app() -> App {
     App::new(Box::new(DemoProvider::new().unwrap()), false)

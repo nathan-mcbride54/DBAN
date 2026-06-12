@@ -6,7 +6,7 @@
 //!
 //! NOTE ON SSDs: overwrite schemes were designed for magnetic media. Flash
 //! translation layers (wear leveling, over-provisioning) mean an overwrite
-//! cannot reach every physical cell on an SSD. Scour surfaces this advisory
+//! cannot reach every physical cell on an SSD. DBAN surfaces this advisory
 //! in the UI whenever a non-rotational disk is selected; NIST SP 800-88
 //! recommends crypto-erase / SANITIZE commands for flash purge.
 
@@ -71,7 +71,7 @@ impl Pass {
 pub enum VerifyMode {
     /// No read-back. Fastest; not recommended.
     None,
-    /// Read back and verify the final pass only (DBAN's "Verify Last Pass").
+    /// Read back and verify the final pass only (the classic "Verify Last Pass").
     LastPass,
     /// Read back and verify every pass. Doubles total I/O.
     AllPasses,
@@ -185,7 +185,7 @@ pub fn all_schemes() -> Vec<Scheme> {
         Scheme {
             id: "prng",
             name: "PRNG Stream",
-            origin: "DBAN heritage",
+            origin: "classic boot-and-nuke",
             description: "One pass of OS-seeded pseudorandom data, verified by \
                           regenerating the stream. Raise 'rounds' for extra passes.",
             passes: vec![Pass::random()],

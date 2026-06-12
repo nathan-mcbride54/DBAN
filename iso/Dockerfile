@@ -1,4 +1,4 @@
-# Scour ISO builder.
+# DBAN ISO builder.
 #
 # Stage 1 compiles the TUI to a fully static musl binary (no libc runtime
 # dependency, so it can be PID 1 in an otherwise-empty initramfs).
@@ -19,12 +19,12 @@ COPY crates ./crates
 # musl static binaries as "statically linked" (or "static-pie linked"); a
 # dynamic build would say "dynamically linked", which we reject.
 RUN rustup target add x86_64-unknown-linux-musl \
- && cargo build --release --bin scour --target x86_64-unknown-linux-musl \
- && strip target/x86_64-unknown-linux-musl/release/scour \
- && cp target/x86_64-unknown-linux-musl/release/scour /scour \
- && file /scour \
- && file /scour | grep -qi 'static' \
-      || (echo "FATAL: scour is not statically linked" >&2; exit 1)
+ && cargo build --release --bin dban --target x86_64-unknown-linux-musl \
+ && strip target/x86_64-unknown-linux-musl/release/dban \
+ && cp target/x86_64-unknown-linux-musl/release/dban /dban \
+ && file /dban \
+ && file /dban | grep -qi 'static' \
+      || (echo "FATAL: dban is not statically linked" >&2; exit 1)
 
 # ---------------------------------------------------------------------------
 # Stage 2 — assemble the ISO
@@ -45,10 +45,10 @@ RUN apk add --no-cache \
         gzip \
         bash
 
-COPY --from=builder /scour /build/scour
+COPY --from=builder /dban /build/dban
 COPY iso/init /build/init
 COPY iso/mkimage.sh /build/mkimage.sh
 RUN chmod +x /build/init /build/mkimage.sh
 
-ENV SCOUR_LABEL=SCOUR
+ENV DBAN_LABEL=DBAN
 ENTRYPOINT ["/build/mkimage.sh"]

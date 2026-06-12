@@ -1,9 +1,9 @@
 #!/bin/bash
 # Assemble the hybrid BIOS+UEFI ISO. Runs inside the builder container.
-# Writes /out/scour.iso (bind-mounted from the host's dist/).
+# Writes /out/dban.iso (bind-mounted from the host's dist/).
 set -euo pipefail
 
-LABEL="${SCOUR_LABEL:-SCOUR}"
+LABEL="${DBAN_LABEL:-DBAN}"
 WORK=/work
 
 if [ ! -d /out ]; then
@@ -19,9 +19,9 @@ mkdir -p "$ISOROOT/boot/grub" "$INITRAMFS/bin" "$INITRAMFS/proc" \
          "$INITRAMFS/sys" "$INITRAMFS/dev" "$INITRAMFS/tmp"
 
 # ---- initramfs: kernel's first and only userland ----
-cp /build/scour "$INITRAMFS/bin/scour"
+cp /build/dban "$INITRAMFS/bin/dban"
 cp /build/init  "$INITRAMFS/init"
-chmod +x "$INITRAMFS/init" "$INITRAMFS/bin/scour"
+chmod +x "$INITRAMFS/init" "$INITRAMFS/bin/dban"
 # A minimal /bin/sh fallback (busybox) only for the unexpected-exit panic path.
 if [ -x /bin/busybox ]; then
     cp /bin/busybox "$INITRAMFS/bin/busybox"
@@ -37,16 +37,16 @@ fi
 cp /boot/vmlinuz-lts "$ISOROOT/boot/vmlinuz"
 
 # ---- bootloader config ----
-# quiet + console on tty1; scour owns the screen.
+# quiet + console on tty1; dban owns the screen.
 cat > "$ISOROOT/boot/grub/grub.cfg" <<EOF
 set timeout=3
 set default=0
 insmod all_video
-menuentry "Scour — secure disk eraser" {
+menuentry "DBAN — secure disk eraser" {
     linux /boot/vmlinuz quiet loglevel=0 console=tty1
     initrd /boot/initramfs.gz
 }
-menuentry "Scour (safe graphics / nomodeset)" {
+menuentry "DBAN (safe graphics / nomodeset)" {
     linux /boot/vmlinuz quiet loglevel=0 console=tty1 nomodeset
     initrd /boot/initramfs.gz
 }
@@ -75,7 +75,7 @@ grub-mkstandalone \
 EFI_BYTES=$(stat -c %s "$WORK/efi/boot/bootx64.efi")
 ESP_MIB=$(( (EFI_BYTES / 1048576) + 2 ))
 dd if=/dev/zero of="$WORK/efiboot.img" bs=1M count="$ESP_MIB" status=none
-mkfs.vfat -n SCOUREFI "$WORK/efiboot.img" >/dev/null
+mkfs.vfat -n DBANEFI "$WORK/efiboot.img" >/dev/null
 mmd   -i "$WORK/efiboot.img" ::/EFI ::/EFI/BOOT
 mcopy -i "$WORK/efiboot.img" "$WORK/efi/boot/bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
 cp "$WORK/efiboot.img" "$ISOROOT/boot/grub/efiboot.img"
@@ -87,7 +87,7 @@ cp "$WORK/efi/boot/bootx64.efi" "$ISOROOT/EFI/BOOT/BOOTX64.EFI"
 
 xorriso -as mkisofs \
     -volid "$LABEL" \
-    -o /out/scour.iso \
+    -o /out/dban.iso \
     -graft-points \
     -b boot/grub/bios.img \
         -no-emul-boot -boot-load-size 4 -boot-info-table \
@@ -99,4 +99,4 @@ xorriso -as mkisofs \
     -r -J "$ISOROOT"
 
 echo "ISO label: $LABEL"
-echo "Wrote /out/scour.iso"
+echo "Wrote /out/dban.iso"

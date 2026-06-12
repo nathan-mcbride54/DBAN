@@ -6,13 +6,13 @@ use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use scour_core::algorithm::{all_schemes, Scheme, VerifyMode};
-use scour_core::device::{Disk, DiskProvider};
-use scour_core::engine::{spawn_firmware, spawn_wipe, JobHandle, WipeSpec};
-use scour_core::firmware::{self, FirmwareMethod, FirmwareSupport};
-use scour_core::report::SessionReport;
-use scour_core::safety::SafetyGate;
-use scour_core::sysinfo::{self, SystemInfo};
+use dban_core::algorithm::{all_schemes, Scheme, VerifyMode};
+use dban_core::device::{Disk, DiskProvider};
+use dban_core::engine::{spawn_firmware, spawn_wipe, JobHandle, WipeSpec};
+use dban_core::firmware::{self, FirmwareMethod, FirmwareSupport};
+use dban_core::report::SessionReport;
+use dban_core::safety::SafetyGate;
+use dban_core::sysinfo::{self, SystemInfo};
 
 /// The top-level screen currently shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -647,7 +647,7 @@ impl App {
         }
     }
 
-    fn start_jobs(&mut self, token: scour_core::safety::ArmToken) {
+    fn start_jobs(&mut self, token: dban_core::safety::ArmToken) {
         let method = self.current_method();
         let spec = self.spec();
         let targets: Vec<Disk> = self.target_disks().into_iter().cloned().collect();

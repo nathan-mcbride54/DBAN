@@ -17,7 +17,7 @@
 //!
 //! Capability detection issues only **non-destructive** identify commands, so
 //! it is always safe to run. The erase commands themselves are gated, like
-//! every destructive path in Scour, behind [`crate::safety::ArmToken`].
+//! every destructive path in DBAN, behind [`crate::safety::ArmToken`].
 //!
 //! The real commands are issued on Linux via SCSI/NVMe ioctl pass-through
 //! (`SG_IO` ATA PASS-THROUGH, `NVME_IOCTL_ADMIN_CMD`). On other platforms, or
@@ -524,7 +524,7 @@ mod linux {
         // the erase clears it again. Password block is 512 bytes: control word
         // then 32 bytes of password at offset 2.
         let mut pw = [0u8; 512];
-        pw[2..6].copy_from_slice(b"scour");
+        pw[2..6].copy_from_slice(b"dban");
         ata_passthrough(path, 0, 1, 0, 0xF1, &mut pw.clone())?;
 
         // ERASE UNIT: feature 0x02 selects enhanced erase.

@@ -1,5 +1,5 @@
 [package]
-name = "scour-core"
+name = "dban-core"
 description = "Disk sanitization engine: wipe schemes, device discovery, safety interlocks"
 version.workspace = true
 edition.workspace = true

@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use scour::app::{App, MethodChoice, Screen};
+use dban::app::{App, MethodChoice, Screen};
 
-use scour_core::device::{Bus, Disk, DiskProvider, MediaKind};
-use scour_core::firmware::FirmwareMethod;
-use scour_core::CoreError;
+use dban_core::device::{Bus, Disk, DiskProvider, MediaKind};
+use dban_core::firmware::FirmwareMethod;
+use dban_core::CoreError;
 
 struct FwProvider {
     dir: tempfile::TempDir,

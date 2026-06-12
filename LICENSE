@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Scour contributors
+Copyright (c) 2026 DBAN contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -23,6 +23,6 @@ SOFTWARE.
 ------------------------------------------------------------------------------
 SAFETY NOTICE
 
-Scour permanently destroys data. It is designed for authorized erasure of
+DBAN permanently destroys data. It is designed for authorized erasure of
 storage you own or are explicitly permitted to wipe. The authors accept no
 responsibility for data loss. There is no undo.

@@ -1,7 +1,7 @@
-//! Scour entry point.
+//! DBAN entry point.
 //!
 //! Two roles, chosen at runtime:
-//! * **Hosted** (`scour` or `scour --demo` from a normal shell): runs in the
+//! * **Hosted** (`dban` or `dban --demo` from a normal shell): runs in the
 //!   existing terminal, restores it on exit, returns to the shell.
 //! * **Appliance / init** (PID 1 on the live ISO): owns the machine. There is
 //!   no shell to return to, so "quit" means reboot or power off, performed via
@@ -18,11 +18,11 @@ use ratatui::crossterm::{cursor, execute};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 
-use scour::app::{App, ExitAction};
-use scour::theme::Theme;
-use scour::ui;
+use dban::app::{App, ExitAction};
+use dban::theme::Theme;
+use dban::ui;
 
-use scour_core::device::DiskProvider;
+use dban_core::device::DiskProvider;
 
 const TICK: Duration = Duration::from_millis(100);
 
@@ -35,7 +35,7 @@ fn main() {
         return;
     }
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("scour {}", scour_core::VERSION);
+        println!("dban {}", dban_core::VERSION);
         return;
     }
 
@@ -44,7 +44,7 @@ fn main() {
     if let Err(e) = run(provider, pid1) {
         // Never leave the terminal in raw mode on the way out.
         let _ = restore_terminal();
-        eprintln!("scour: fatal error: {e}");
+        eprintln!("dban: fatal error: {e}");
         if sim {
             std::process::exit(1);
         }
@@ -60,16 +60,16 @@ fn main() {
 
 fn print_usage() {
     println!(
-        "scour {} — secure disk sanitization\n\n\
-         USAGE:\n    scour [--demo | --real]\n\n\
+        "dban {} — secure disk sanitization\n\n\
+         USAGE:\n    dban [--demo | --real]\n\n\
          OPTIONS:\n\
          \x20   --demo      Force the simulation provider (safe temp-file disks).\n\
          \x20   --real      Force real hardware discovery (Linux, needs root).\n\
          \x20   --version   Print version and exit.\n\
          \x20   --help      Show this help.\n\n\
-         With no flag, Scour uses real hardware when run as root on Linux,\n\
+         With no flag, DBAN uses real hardware when run as root on Linux,\n\
          and the simulation provider otherwise.",
-        scour_core::VERSION
+        dban_core::VERSION
     );
 }
 
@@ -97,7 +97,7 @@ fn choose_provider(
         let is_root = unsafe { libc::geteuid() == 0 };
         let want_real = force_real || pid1 || (is_root && !force_demo);
         if want_real {
-            return (Box::new(scour_core::linux::SysfsProvider::new()), false);
+            return (Box::new(dban_core::linux::SysfsProvider::new()), false);
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -105,10 +105,10 @@ fn choose_provider(
         let _ = (force_real, pid1);
     }
     let _ = force_demo;
-    match scour_core::demo::DemoProvider::new() {
+    match dban_core::demo::DemoProvider::new() {
         Ok(p) => (Box::new(p), true),
         Err(e) => {
-            eprintln!("scour: could not initialize simulation provider: {e}");
+            eprintln!("dban: could not initialize simulation provider: {e}");
             std::process::exit(1);
         }
     }

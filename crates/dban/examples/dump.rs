@@ -1,15 +1,15 @@
 //! Render each screen to a TestBackend and print the buffer as text, so UI
 //! glitches (border drift, overflow) are visible without a real terminal.
-//! Run: cargo run -p scour --example dump
+//! Run: cargo run -p dban --example dump
 
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-use scour::app::App;
-use scour::theme::Theme;
-use scour::ui;
+use dban::app::App;
+use dban::theme::Theme;
+use dban::ui;
 
-use scour_core::demo::DemoProvider;
+use dban_core::demo::DemoProvider;
 
 fn dump(term: &Terminal<TestBackend>, label: &str) {
     let buf = term.backend().buffer();

@@ -168,9 +168,9 @@ impl Theme {
 
     /// Pick a theme from the environment. The kernel console (`TERM=linux`)
     /// and dumb terminals get the safe theme; everything else gets the pretty
-    /// one. `NO_COLOR` and an explicit `SCOUR_PLAIN` also force safe mode.
+    /// one. `NO_COLOR` and an explicit `DBAN_PLAIN` also force safe mode.
     pub fn detect() -> Self {
-        if std::env::var_os("SCOUR_PLAIN").is_some() || std::env::var_os("NO_COLOR").is_some() {
+        if std::env::var_os("DBAN_PLAIN").is_some() || std::env::var_os("NO_COLOR").is_some() {
             return Self::plain();
         }
         match std::env::var("TERM").as_deref() {

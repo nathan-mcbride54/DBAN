@@ -17,13 +17,13 @@ use ratatui::widgets::{
 };
 use ratatui::Frame;
 
-use scour_core::device::{Disk, MediaKind};
-use scour_core::engine::{JobStatus, Phase};
+use dban_core::device::{Disk, MediaKind};
+use dban_core::engine::{JobStatus, Phase};
 
 use crate::app::{App, Screen};
 use crate::theme::Theme;
 
-const APP_TITLE: &str = "SCOUR";
+const APP_TITLE: &str = "DBAN";
 const TAGLINE: &str = "secure disk sanitization";
 
 /// Entry point: draw the whole frame for the current app state.
@@ -703,7 +703,7 @@ fn draw_help(f: &mut Frame, t: &Theme, area: Rect) {
         .padding(Padding::horizontal(1))
         .title(Span::styled(" Help ", t.title()));
     let text = vec![
-        Line::from(Span::styled("Scour — secure disk sanitization", t.title())),
+        Line::from(Span::styled("DBAN — secure disk sanitization", t.title())),
         Line::from(""),
         Line::from(vec![Span::styled("Disks screen", t.heading())]),
         Line::from("  up/down or j/k   move the cursor"),

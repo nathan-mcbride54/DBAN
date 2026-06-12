@@ -1,19 +1,19 @@
-# Scour
+# DBAN
 
-**A modern, Rust, boot-and-nuke disk eraser.** Scour is a spiritual successor
-to DBAN: a tiny bootable image that brings up a clean terminal UI, shows you
-the hardware and disks in the machine, and sanitizes the ones you explicitly
-choose — by software overwrite (every major published standard) or by
-drive-internal firmware erase (ATA Secure Erase, NVMe Format / Sanitize).
+**DBAN — Disk Boot and Nuke.** A modern, from-scratch boot-and-nuke disk
+eraser written in Rust: a tiny bootable image that brings up a clean terminal
+UI, shows you the hardware and disks in the machine, and sanitizes the ones you
+explicitly choose — by software overwrite (every major published standard) or
+by drive-internal firmware erase (ATA Secure Erase, NVMe Format / Sanitize).
 
 ```
- SCOUR  secure disk sanitization              8 cores │ 32 GB │ Linux 6.6
+ DBAN  secure disk sanitization              8 cores │ 32 GB │ Linux 6.6
 ────────────────────────────────────────────────────────────────────────────
  ╭ Disks ───────────────────────────────────────────────────────────────────╮
  │     DEVICE     MODEL                       SIZE   BUS    TYPE  STATE       │
  │▌█  nvme0n1     Samsung SSD 980 PRO       1.0 TB   NVMe   SSD   WILL ERASE  │
  │    sda         Seagate Barracuda ST2000  2.0 TB   SATA   HDD   ready       │
- │ ▒  sdb         SCOUR boot medium        32.0 GB   USB    SSD   boot medium │
+ │ ▒  sdb         DBAN boot medium        32.0 GB   USB    SSD   boot medium │
  ╰───────────────────────────────────────────────────────────────────────────╯
  ╭ Method ──────────────────────────────────────────────────────────────────╮
  │ ‹ NIST 800-88 Clear ›   1/17   1 pass(es)    RECOMMENDED                   │
@@ -27,15 +27,15 @@ The cursor row carries a `▌` bar; a `█` marks a disk that will be erased.
 On a desktop terminal the UI is rendered in 24-bit color; on the bare Linux
 console it falls back to a 16-color, ASCII-only theme automatically.
 
-> ⚠️ **Scour permanently destroys data. There is no undo.** Read
+> ⚠️ **DBAN permanently destroys data. There is no undo.** Read
 > [Safety design](#safety-design) before using it on real hardware.
 
 ---
 
-## Why another DBAN
+## Why
 
-DBAN is unmaintained, doesn't understand NVMe, has a dated UI, and its codebase
-is C. Scour is:
+The classic boot-and-nuke disk erasers are unmaintained, don't understand
+NVMe, have dated UIs, and are written in C. DBAN is:
 
 - **Written almost entirely in safe Rust.** The only `unsafe` blocks are a
   handful of audited, commented primitives: page-aligned buffers for
@@ -45,13 +45,13 @@ is C. Scour is:
   whole UI — is safe Rust.
 - **A purpose-built appliance.** On the ISO there is *no distro userland*: no
   shell, no BusyBox prompt, no package manager. The Linux kernel boots and
-  launches the Scour binary directly as PID 1. The entire userland is one
+  launches the DBAN binary directly as PID 1. The entire userland is one
   program whose only jobs are showing hardware and wiping disks.
 - **Fast to boot and light.** A single static musl binary in a minimal
   initramfs. No services to start.
 - **Multi-threaded.** One worker thread per disk, so wiping four drives wipes
   them in parallel rather than in series.
-- **Firmware-aware.** Beyond overwriting, Scour can issue the drive's own purge
+- **Firmware-aware.** Beyond overwriting, DBAN can issue the drive's own purge
   commands — ATA Secure Erase and NVMe Format / Sanitize — the only software
   method that truly sanitizes flash. It probes each disk's capabilities
   (non-destructively) and only offers what the hardware supports.
@@ -63,12 +63,12 @@ is C. Scour is:
 
 ### "Is this really an OS from scratch?"
 
-Honest answer: **no, and that's the right call.** A from-scratch kernel would
+Honest answer: **no, and that is the right call.** A from-scratch kernel would
 have to reimplement AHCI, NVMe, USB-storage, SATA port multipliers, RAID/dm,
 and filesystem detection before it could erase a single real disk — years of
-work to *worse* hardware support than Linux gives you for free. So Scour takes
+work to *worse* hardware support than Linux gives you for free. So DBAN takes
 the pragmatic "purpose-built OS" path: the Linux kernel for drivers, and
-*nothing else* in userland but Scour. The result boots in seconds and behaves
+*nothing else* in userland but DBAN. The result boots in seconds and behaves
 like a single-purpose appliance, which is what you actually want from a nuke
 tool.
 
@@ -78,18 +78,18 @@ tool.
 
 ```
 crates/
-  scour-core/      UI-free engine: overwrite algorithms, PRNG, firmware erase
+  dban-core/      UI-free engine: overwrite algorithms, PRNG, firmware erase
                    (ATA/NVMe), device discovery, the wipe engine, the safety
                    interlock, reporting. Fully documented (deny(missing_docs)).
-  scour/           ratatui TUI + the binary that runs as PID 1 on the ISO.
+  dban/           ratatui TUI + the binary that runs as PID 1 on the ISO.
                    app.rs is a pure state machine; ui.rs renders it; theme.rs
                    holds the palette + glyphs.
     examples/dump.rs   Renders each screen to text for eyeballing.
     tests/             app_flow, firmware_flow, ui_integrity.
 iso/
   Dockerfile       Two-stage build: static musl binary → hybrid ISO.
-  build.sh         One command to produce dist/scour.iso (needs Docker).
-  init             The shell shim that execs scour as PID 1.
+  build.sh         One command to produce dist/dban.iso (needs Docker).
+  init             The shell shim that execs dban as PID 1.
   mkimage.sh       Assembles the BIOS+UEFI bootable image.
 ```
 
@@ -99,18 +99,18 @@ iso/
 
 ### Try the UI safely (no hardware touched)
 
-Scour ships a **simulation provider**: five realistic fake disks backed by
+DBAN ships a **simulation provider**: five realistic fake disks backed by
 sparse temp files, throttled to believable speeds. It runs on Windows, macOS,
 or Linux and never touches a real device.
 
 ```sh
-cargo run -p scour -- --demo
+cargo run -p dban -- --demo
 ```
 
 Select a disk with `space`, pick a method with `<` / `>`, press `s`, and watch
 a real (simulated) wipe with live progress. The demo SATA and NVMe disks
 advertise firmware-erase support, so you can exercise that path too. Backing
-files live under your temp dir in `scour-demo/`.
+files live under your temp dir in `dban-demo/`.
 
 ### Run the test suite
 
@@ -128,18 +128,18 @@ cargo doc --no-deps --workspace
 Requires Docker. Everything else happens inside the container.
 
 ```sh
-./iso/build.sh        # → dist/scour.iso  (hybrid BIOS + UEFI)
+./iso/build.sh        # → dist/dban.iso  (hybrid BIOS + UEFI)
 ```
 
 Write it to a USB stick (this erases the stick):
 
 ```sh
 # Linux
-sudo dd if=dist/scour.iso of=/dev/sdX bs=4M conv=fsync status=progress
+sudo dd if=dist/dban.iso of=/dev/sdX bs=4M conv=fsync status=progress
 # Windows / macOS: use Rufus, balenaEtcher, or Ventoy.
 ```
 
-Boot the target machine from it. Scour comes up automatically.
+Boot the target machine from it. DBAN comes up automatically.
 
 ---
 
@@ -150,7 +150,7 @@ Boot the target machine from it. Scour comes up automatically.
 | Method | Origin | Passes | Notes |
 |---|---|---|---|
 | **NIST 800-88 Clear** ★ | NIST SP 800-88 Rev.1 | 1 | Verified zero pass — the modern baseline |
-| PRNG Stream | DBAN heritage | 1+ | OS-seeded random, seed-verifiable |
+| PRNG Stream | classic boot-and-nuke | 1+ | OS-seeded random, seed-verifiable |
 | DoD 5220.22-M (E) | US DoD | 3 | zeros / ones / random |
 | DoD 5220.22-M (ECE) | US DoD | 7 | E-sequence, random, E-sequence |
 | Schneier | Applied Cryptography | 7 | ones, zeros, 5× random |
@@ -177,7 +177,7 @@ Random passes are verified without buffering: the engine records each pass's
 | NVMe Sanitize (block) | NVMe | strongest NVMe purge across the whole subsystem |
 | NVMe Sanitize (crypto) | NVMe | crypto-erase across the whole subsystem |
 
-Scour probes each disk's support **non-destructively** (ATA `IDENTIFY`, NVMe
+DBAN probes each disk's support **non-destructively** (ATA `IDENTIFY`, NVMe
 Identify Controller) and only targets disks the chosen command can actually
 run; others in the selection are shown as `skip (n/a)` and left untouched. On
 real hardware these commands report no progress, so the UI shows an
@@ -187,7 +187,7 @@ indeterminate pulse; the report records exactly which command ran.
 
 Overwrite-based erasure was designed for magnetic media. Flash translation
 layers (wear-leveling, over-provisioning) mean a software overwrite *cannot
-reach every physical cell* on an SSD. Scour warns whenever you select flash
+reach every physical cell* on an SSD. DBAN warns whenever you select flash
 media and points you at the firmware-purge methods above, which are the correct
 NIST "Purge" for SSDs.
 
@@ -195,7 +195,7 @@ NIST "Purge" for SSDs.
 
 ## Safety design
 
-A boot-and-nuke tool that can be triggered carelessly is dangerous. Scour is
+A boot-and-nuke tool that can be triggered carelessly is dangerous. DBAN is
 built so that **no code path can start a wipe unattended**:
 
 1. **No dangerous CLI surface.** There are no flags that select disks or start
@@ -211,7 +211,7 @@ built so that **no code path can start a wipe unattended**:
 4. **An abortable countdown.** After the phrase, a 5-second countdown runs
    during which *any key aborts*.
 5. **Locked disks can never be selected.** Anything mounted, in use as swap,
-   held by RAID/device-mapper, or detected as the Scour boot medium itself is
+   held by RAID/device-mapper, or detected as the DBAN boot medium itself is
    marked locked and rejected — both at selection time and again inside the
    engine.
 

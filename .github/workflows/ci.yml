@@ -34,6 +34,6 @@ jobs:
         run: ./iso/build.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: scour.iso
-          path: dist/scour.iso
+          name: dban.iso
+          path: dist/dban.iso
           if-no-files-found: error

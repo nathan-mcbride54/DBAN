@@ -5,7 +5,7 @@
 //! * any mounted partition (or the whole-disk device itself) → `Mounted`
 //! * any active swap partition → `SwapActive`
 //! * kernel holders (dm/RAID/LVM members) → `InUse`
-//! * an ISO9660 signature whose volume label starts with `SCOUR` → `BootMedium`
+//! * an ISO9660 signature whose volume label starts with `DBAN` → `BootMedium`
 //!   (that's the stick the live system booted from)
 
 use std::collections::HashSet;
@@ -17,7 +17,7 @@ use crate::device::{Bus, Disk, DiskProvider, LockReason, MediaKind};
 use crate::CoreError;
 
 /// Volume label prefix stamped onto the live ISO by `iso/build.sh`.
-pub const BOOT_LABEL_PREFIX: &str = "SCOUR";
+pub const BOOT_LABEL_PREFIX: &str = "DBAN";
 
 /// Enumerates real disks from `/sys/block`, with conservative lock analysis.
 pub struct SysfsProvider {
@@ -209,7 +209,7 @@ fn detect_lock(
             return Some(LockReason::InUse);
         }
     }
-    if is_scour_boot_medium(dev_path) {
+    if is_dban_boot_medium(dev_path) {
         return Some(LockReason::BootMedium);
     }
     None
@@ -218,7 +218,7 @@ fn detect_lock(
 /// Detect the live boot stick: a hybrid ISO carries the ISO9660 Primary
 /// Volume Descriptor at byte 32768 of the *device*; its volume id sits at
 /// offset 40 within the descriptor.
-fn is_scour_boot_medium(dev_path: &Path) -> bool {
+fn is_dban_boot_medium(dev_path: &Path) -> bool {
     let Ok(mut f) = fs::File::open(dev_path) else {
         return false;
     };

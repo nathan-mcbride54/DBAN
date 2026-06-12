@@ -1,6 +1,6 @@
 //! Simulation provider: realistic-looking disks backed by sparse temp files.
 //!
-//! Used automatically when Scour runs on a non-Linux host or without root,
+//! Used automatically when DBAN runs on a non-Linux host or without root,
 //! and explicitly via `--demo`. Throughput is throttled per "disk" so the
 //! progress UI behaves like real hardware instead of finishing instantly.
 
@@ -72,7 +72,7 @@ const SPECS: [DemoSpec; 5] = [
     },
     DemoSpec {
         name: "sdd",
-        model: "Scour boot medium (sim)",
+        model: "DBAN boot medium (sim)",
         serial: "BOOTDEMO",
         size: 64 * MIB,
         bus: Bus::Usb,
@@ -92,7 +92,7 @@ impl DemoProvider {
     /// Create the provider, ensuring its backing directory under the system
     /// temp dir exists.
     pub fn new() -> Result<Self, CoreError> {
-        let dir = std::env::temp_dir().join("scour-demo");
+        let dir = std::env::temp_dir().join("dban-demo");
         fs::create_dir_all(&dir)?;
         Ok(DemoProvider { dir })
     }

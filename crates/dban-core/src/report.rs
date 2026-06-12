@@ -12,7 +12,7 @@ use crate::sysinfo::SystemInfo;
 /// The auditable record of a whole wipe session: tool, host, and every job.
 #[derive(Clone, Debug, Serialize)]
 pub struct SessionReport {
-    /// Tool name (`"scour"`).
+    /// Tool name (`"dban"`).
     pub tool: String,
     /// Tool version string.
     pub tool_version: String,
@@ -30,7 +30,7 @@ impl SessionReport {
     /// Assemble a session report from the host info and finished jobs.
     pub fn new(host: SystemInfo, simulation: bool, jobs: Vec<JobReport>) -> Self {
         SessionReport {
-            tool: "scour".to_string(),
+            tool: "dban".to_string(),
             tool_version: crate::VERSION.to_string(),
             created_unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -47,9 +47,9 @@ impl SessionReport {
         serde_json::to_string_pretty(self).expect("report serialization cannot fail")
     }
 
-    /// Write `scour-report-<unix-ts>.json` into `dir`, returning the full path.
+    /// Write `dban-report-<unix-ts>.json` into `dir`, returning the full path.
     pub fn save_json(&self, dir: &Path) -> io::Result<PathBuf> {
-        let path = dir.join(format!("scour-report-{}.json", self.created_unix));
+        let path = dir.join(format!("dban-report-{}.json", self.created_unix));
         std::fs::write(&path, self.to_json())?;
         Ok(path)
     }
@@ -101,7 +101,7 @@ mod tests {
         );
         let json = report.to_json();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value["tool"], "scour");
+        assert_eq!(value["tool"], "dban");
         assert_eq!(value["simulation"], true);
         assert_eq!(value["jobs"][0]["status"], "Success");
         assert_eq!(value["jobs"][0]["disk_name"], "sda");
@@ -114,7 +114,7 @@ mod tests {
         let path = report.save_json(dir.path()).unwrap();
         assert!(path.exists());
         let content = std::fs::read_to_string(path).unwrap();
-        assert!(content.contains("scour"));
+        assert!(content.contains("dban"));
     }
 
     #[test]

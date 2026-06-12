@@ -9,12 +9,12 @@ use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 
-use scour::app::{App, Screen};
-use scour::theme::Theme;
-use scour::ui;
+use dban::app::{App, Screen};
+use dban::theme::Theme;
+use dban::ui;
 
-use scour_core::device::{Bus, Disk, DiskProvider, LockReason, MediaKind};
-use scour_core::CoreError;
+use dban_core::device::{Bus, Disk, DiskProvider, LockReason, MediaKind};
+use dban_core::CoreError;
 
 /// A deterministic provider with two tiny disks (one wipeable, one locked),
 /// no throttle, so wipes finish almost instantly.

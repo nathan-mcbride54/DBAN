@@ -1,4 +1,4 @@
-//! scour-core — the sanitization engine behind Scour.
+//! dban-core — the sanitization engine behind DBAN.
 //!
 //! This crate is deliberately UI-free. Everything destructive funnels through
 //! [`engine::spawn_wipe`] / [`engine::spawn_firmware`], which cannot be called
