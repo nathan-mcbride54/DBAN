@@ -19,11 +19,13 @@ use crate::CoreError;
 /// Volume label prefix stamped onto the live ISO by `iso/build.sh`.
 pub const BOOT_LABEL_PREFIX: &str = "SCOUR";
 
+/// Enumerates real disks from `/sys/block`, with conservative lock analysis.
 pub struct SysfsProvider {
     root: PathBuf,
 }
 
 impl SysfsProvider {
+    /// Create a provider rooted at `/sys/block`.
     pub fn new() -> Self {
         SysfsProvider {
             root: PathBuf::from("/sys/block"),

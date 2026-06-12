@@ -821,7 +821,7 @@ impl Target {
         // O_DIRECT needs sector-multiple transfer sizes; only attempt it when
         // the target length cooperates (real block devices always do).
         #[cfg(target_os = "linux")]
-        if size % 512 == 0 {
+        if size.is_multiple_of(512) {
             use std::os::unix::fs::OpenOptionsExt;
             if let Ok(file) = OpenOptions::new()
                 .read(true)
