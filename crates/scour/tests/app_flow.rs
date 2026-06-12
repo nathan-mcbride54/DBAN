@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 
 use scour::app::{App, Screen};
-use scour::theme::Glyphs;
+use scour::theme::Theme;
 use scour::ui;
 
 use scour_core::device::{Bus, Disk, DiskProvider, LockReason, MediaKind};
@@ -77,9 +77,9 @@ fn new_app() -> App {
 /// Render once to a TestBackend; panics if any widget overflows or layout
 /// math is invalid. This is our UI smoke test on every screen.
 fn render(app: &App) {
-    let glyphs = Glyphs::plain();
+    let theme = Theme::plain();
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    term.draw(|f| ui::draw(f, app, &glyphs)).unwrap();
+    term.draw(|f| ui::draw(f, app, &theme)).unwrap();
 }
 
 #[test]
@@ -200,12 +200,14 @@ fn every_screen_renders_without_panic() {
 
 #[test]
 fn tiny_terminal_does_not_panic() {
-    // Pathological small sizes are a classic TUI crash. We must survive them.
+    // Pathological small sizes are a classic TUI crash. We must survive them,
+    // in both themes.
     let app = new_app();
-    let glyphs = Glyphs::fancy();
-    for (w, h) in [(1, 1), (4, 2), (10, 3), (20, 5), (80, 24)] {
-        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-        term.draw(|f| ui::draw(f, &app, &glyphs)).unwrap();
+    for theme in [Theme::fancy(), Theme::plain()] {
+        for (w, h) in [(1, 1), (4, 2), (10, 3), (20, 5), (80, 24)] {
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| ui::draw(f, &app, &theme)).unwrap();
+        }
     }
 }
 

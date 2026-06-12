@@ -19,7 +19,7 @@ use ratatui::prelude::CrosstermBackend;
 use ratatui::Terminal;
 
 use scour::app::{App, ExitAction};
-use scour::theme::Glyphs;
+use scour::theme::Theme;
 use scour::ui;
 
 use scour_core::device::DiskProvider;
@@ -115,14 +115,14 @@ fn choose_provider(
 }
 
 fn run(provider: Box<dyn DiskProvider>, pid1: bool) -> io::Result<()> {
-    let glyphs = Glyphs::detect();
+    let theme = Theme::detect();
     let mut terminal = setup_terminal()?;
     let mut app = App::new(provider, pid1);
     let mut last = Instant::now();
 
     let result = (|| -> io::Result<()> {
         loop {
-            terminal.draw(|f| ui::draw(f, &app, &glyphs))?;
+            terminal.draw(|f| ui::draw(f, &app, &theme))?;
 
             // Block for input up to the next tick, so the UI animates even
             // when idle but doesn't spin the CPU.
