@@ -2,15 +2,21 @@
 
 use serde::Serialize;
 
+/// A summary of the host machine, shown in the header and embedded in reports.
 #[derive(Clone, Debug, Serialize)]
 pub struct SystemInfo {
+    /// CPU model string.
     pub cpu_model: String,
+    /// Number of logical CPU cores.
     pub cpu_cores: usize,
+    /// Total physical memory in bytes (0 if unknown).
     pub mem_total_bytes: u64,
+    /// Kernel / OS identification string.
     pub kernel: String,
 }
 
 impl SystemInfo {
+    /// Total memory formatted for display, or `"—"` when unknown.
     pub fn mem_human(&self) -> String {
         if self.mem_total_bytes == 0 {
             "—".to_string()
@@ -20,6 +26,7 @@ impl SystemInfo {
     }
 }
 
+/// Gather a [`SystemInfo`] for the current host.
 pub fn collect() -> SystemInfo {
     let cpu_cores = std::thread::available_parallelism()
         .map(|n| n.get())

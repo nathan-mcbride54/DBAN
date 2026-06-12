@@ -11,6 +11,7 @@
 //!   Gutmann, …) driven pass-by-pass over the block device.
 //! * [`firmware`] — drive-internal purge commands (ATA Secure Erase, NVMe
 //!   Format / Sanitize) for media that overwriting cannot fully reach.
+#![deny(missing_docs)]
 
 pub mod algorithm;
 pub mod buffer;

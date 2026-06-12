@@ -1,9 +1,9 @@
 //! Disk model and the provider abstraction.
 //!
-//! Real hardware is enumerated by [`crate::linux`] (sysfs). The
-//! [`crate::demo`] provider serves simulated disks backed by temp files so the
-//! full UI and engine can run anywhere — including CI — without touching real
-//! storage.
+//! Real hardware is enumerated by the `linux` module (sysfs; Linux-only). The
+//! [`demo`](crate::demo) provider serves simulated disks backed by temp files
+//! so the full UI and engine can run anywhere — including CI — without touching
+//! real storage.
 
 use std::path::PathBuf;
 
@@ -11,18 +11,28 @@ use serde::Serialize;
 
 use crate::CoreError;
 
+/// The transport a disk is attached by. Used for display and to route
+/// firmware-erase commands (ATA vs. NVMe).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Bus {
+    /// Serial ATA.
     Sata,
+    /// NVM Express.
     Nvme,
+    /// USB mass storage.
     Usb,
+    /// VirtIO block (virtual machines).
     Virtio,
+    /// SD/MMC card.
     Mmc,
+    /// Simulated demo disk.
     Demo,
+    /// Bus could not be determined.
     Unknown,
 }
 
 impl Bus {
+    /// Short display label, e.g. `"SATA"`.
     pub fn label(&self) -> &'static str {
         match self {
             Bus::Sata => "SATA",
@@ -36,13 +46,17 @@ impl Bus {
     }
 }
 
+/// Physical media type, which drives the SSD over-provisioning advisory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum MediaKind {
+    /// Rotational hard disk.
     Hdd,
+    /// Solid-state / flash.
     Ssd,
 }
 
 impl MediaKind {
+    /// Short display label, e.g. `"SSD"`.
     pub fn label(&self) -> &'static str {
         match self {
             MediaKind::Hdd => "HDD",
@@ -65,6 +79,7 @@ pub enum LockReason {
 }
 
 impl LockReason {
+    /// Short display label, e.g. `"mounted"`.
     pub fn label(&self) -> &'static str {
         match self {
             LockReason::Mounted => "mounted",
@@ -75,17 +90,24 @@ impl LockReason {
     }
 }
 
+/// A storage device, real or simulated, as presented to the UI and engine.
 #[derive(Clone, Debug, Serialize)]
 pub struct Disk {
     /// Path the engine opens for writing (`/dev/sda`, or a temp file in demo mode).
     pub path: PathBuf,
     /// Kernel name (`sda`, `nvme0n1`) or demo identifier.
     pub name: String,
+    /// Model string reported by the device.
     pub model: String,
+    /// Serial number (or WWID) reported by the device.
     pub serial: String,
+    /// Capacity in bytes.
     pub size_bytes: u64,
+    /// Transport the disk is attached by.
     pub bus: Bus,
+    /// Rotational vs. solid-state.
     pub kind: MediaKind,
+    /// Whether the device is removable (USB stick, card).
     pub removable: bool,
     /// `Some(reason)` makes the disk permanently unselectable this session.
     pub lock: Option<LockReason>,
@@ -100,10 +122,12 @@ pub struct Disk {
 }
 
 impl Disk {
+    /// True when the disk is locked and can never be selected this session.
     pub fn is_locked(&self) -> bool {
         self.lock.is_some()
     }
 
+    /// Capacity formatted in vendor-style decimal units (e.g. `"500 GB"`).
     pub fn size_human(&self) -> String {
         human_bytes(self.size_bytes)
     }

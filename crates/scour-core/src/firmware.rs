@@ -33,13 +33,21 @@ use crate::device::{Bus, Disk};
 /// A firmware-level sanitization command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum FirmwareMethod {
-    /// ATA `SECURITY ERASE UNIT`. `enhanced` selects the enhanced erase.
-    AtaSecureErase { enhanced: bool },
-    /// NVMe `Format NVM`. `crypto` selects cryptographic erase (SES=2) rather
-    /// than user-data erase (SES=1).
-    NvmeFormat { crypto: bool },
-    /// NVMe `Sanitize`. `crypto` selects crypto-erase rather than block-erase.
-    NvmeSanitize { crypto: bool },
+    /// ATA `SECURITY ERASE UNIT`.
+    AtaSecureErase {
+        /// Select the enhanced erase (vendor pattern + key rotation on SEDs).
+        enhanced: bool,
+    },
+    /// NVMe `Format NVM`.
+    NvmeFormat {
+        /// Cryptographic erase (SES=2) rather than user-data erase (SES=1).
+        crypto: bool,
+    },
+    /// NVMe `Sanitize`.
+    NvmeSanitize {
+        /// Crypto-erase rather than block-erase.
+        crypto: bool,
+    },
 }
 
 impl FirmwareMethod {
@@ -55,6 +63,7 @@ impl FirmwareMethod {
         }
     }
 
+    /// Human-readable method name.
     pub fn name(&self) -> &'static str {
         match self {
             FirmwareMethod::AtaSecureErase { enhanced: false } => "ATA Secure Erase",
@@ -66,6 +75,7 @@ impl FirmwareMethod {
         }
     }
 
+    /// One-paragraph description shown in the UI.
     pub fn description(&self) -> &'static str {
         match self {
             FirmwareMethod::AtaSecureErase { enhanced: false } => {
@@ -107,15 +117,21 @@ impl FirmwareMethod {
 /// What firmware sanitization a specific disk advertises support for.
 #[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct FirmwareSupport {
+    /// ATA security feature set (normal erase) supported.
     pub ata_secure_erase: bool,
+    /// ATA enhanced security erase supported.
     pub ata_enhanced_erase: bool,
     /// Security is *frozen*: the BIOS locked the feature set and an erase will
     /// be refused until the drive is power-cycled (hot-swap / sleep). Surfaced
     /// so the UI can explain why the option is unavailable.
     pub ata_frozen: bool,
+    /// NVMe Format with user-data erase supported.
     pub nvme_format_user: bool,
+    /// NVMe Format with cryptographic erase supported.
     pub nvme_format_crypto: bool,
+    /// NVMe Sanitize block-erase supported.
     pub nvme_sanitize_block: bool,
+    /// NVMe Sanitize crypto-erase supported.
     pub nvme_sanitize_crypto: bool,
 }
 
@@ -144,10 +160,12 @@ impl FirmwareSupport {
         v
     }
 
+    /// True if `method` is among the supported methods.
     pub fn supports(&self, method: FirmwareMethod) -> bool {
         self.methods().contains(&method)
     }
 
+    /// True if the disk supports any firmware sanitization at all.
     pub fn any(&self) -> bool {
         !self.methods().is_empty()
     }
@@ -156,14 +174,19 @@ impl FirmwareSupport {
 /// Errors from firmware sanitization.
 #[derive(Debug, thiserror::Error)]
 pub enum FirmwareError {
+    /// The disk does not support the requested firmware command.
     #[error("firmware command not supported by this disk")]
     Unsupported,
+    /// ATA security is frozen and must be unlocked by a power cycle.
     #[error("drive security is frozen; power-cycle the drive and retry")]
     Frozen,
+    /// The operation was cancelled.
     #[error("operation cancelled")]
     Cancelled,
+    /// A device I/O / ioctl error occurred.
     #[error("device I/O error: {0}")]
     Io(String),
+    /// The drive returned a non-success status code.
     #[error("drive reported command failure (status 0x{0:02x})")]
     DeviceStatus(u32),
 }

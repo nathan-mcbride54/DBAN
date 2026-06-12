@@ -9,17 +9,25 @@ use serde::Serialize;
 use crate::engine::JobReport;
 use crate::sysinfo::SystemInfo;
 
+/// The auditable record of a whole wipe session: tool, host, and every job.
 #[derive(Clone, Debug, Serialize)]
 pub struct SessionReport {
+    /// Tool name (`"scour"`).
     pub tool: String,
+    /// Tool version string.
     pub tool_version: String,
+    /// Unix timestamp the report was created.
     pub created_unix: u64,
+    /// True when the session ran against simulated disks.
     pub simulation: bool,
+    /// Host hardware summary.
     pub host: SystemInfo,
+    /// Per-disk job records.
     pub jobs: Vec<JobReport>,
 }
 
 impl SessionReport {
+    /// Assemble a session report from the host info and finished jobs.
     pub fn new(host: SystemInfo, simulation: bool, jobs: Vec<JobReport>) -> Self {
         SessionReport {
             tool: "scour".to_string(),
@@ -34,6 +42,7 @@ impl SessionReport {
         }
     }
 
+    /// Serialize the report as pretty-printed JSON.
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("report serialization cannot fail")
     }
@@ -45,6 +54,7 @@ impl SessionReport {
         Ok(path)
     }
 
+    /// True when every job in the session completed successfully.
     pub fn all_succeeded(&self) -> bool {
         self.jobs
             .iter()

@@ -83,11 +83,14 @@ const SPECS: [DemoSpec; 5] = [
     },
 ];
 
+/// A [`DiskProvider`] serving simulated disks backed by sparse temp files.
 pub struct DemoProvider {
     dir: PathBuf,
 }
 
 impl DemoProvider {
+    /// Create the provider, ensuring its backing directory under the system
+    /// temp dir exists.
     pub fn new() -> Result<Self, CoreError> {
         let dir = std::env::temp_dir().join("scour-demo");
         fs::create_dir_all(&dir)?;

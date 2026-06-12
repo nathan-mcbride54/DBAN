@@ -18,6 +18,7 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// A xoshiro256++ pseudo-random generator seeded from a 64-bit value.
 #[derive(Clone, Debug)]
 pub struct Prng {
     s: [u64; 4],
@@ -48,6 +49,7 @@ impl Prng {
         (Self::from_seed(seed), seed)
     }
 
+    /// Produce the next 64-bit output and advance the state.
     #[inline]
     pub fn next_u64(&mut self) -> u64 {
         let s = &mut self.s;

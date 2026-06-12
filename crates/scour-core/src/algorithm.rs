@@ -21,25 +21,31 @@ pub enum PassKind {
     Random,
 }
 
+/// A single overwrite pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pass {
+    /// What this pass writes.
     pub kind: PassKind,
 }
 
 impl Pass {
+    /// A pass that writes a repeating byte `pattern`.
     pub const fn fill(pattern: &'static [u8]) -> Self {
         Pass {
             kind: PassKind::Fill(pattern),
         }
     }
+    /// A pass that writes a fresh pseudo-random stream.
     pub const fn random() -> Self {
         Pass {
             kind: PassKind::Random,
         }
     }
+    /// A pass of all-zero bytes.
     pub const fn zeros() -> Self {
         Pass::fill(&[0x00])
     }
+    /// A pass of all-one bytes (`0xFF`).
     pub const fn ones() -> Self {
         Pass::fill(&[0xFF])
     }
@@ -72,6 +78,7 @@ pub enum VerifyMode {
 }
 
 impl VerifyMode {
+    /// Short display label, e.g. `"last pass"`.
     pub fn label(&self) -> &'static str {
         match self {
             VerifyMode::None => "off",
@@ -79,6 +86,7 @@ impl VerifyMode {
             VerifyMode::AllPasses => "all passes",
         }
     }
+    /// Advance to the next mode in the `off → last → all → off` cycle.
     pub fn cycle(&self) -> VerifyMode {
         match self {
             VerifyMode::None => VerifyMode::LastPass,
@@ -93,17 +101,22 @@ impl VerifyMode {
 pub struct Scheme {
     /// Stable machine id, used in reports.
     pub id: &'static str,
+    /// Human-readable scheme name.
     pub name: &'static str,
     /// Where the standard comes from.
     pub origin: &'static str,
+    /// One-paragraph description shown in the UI.
     pub description: &'static str,
+    /// The ordered list of overwrite passes.
     pub passes: Vec<Pass>,
+    /// Verification policy applied by default when this scheme is selected.
     pub default_verify: VerifyMode,
     /// Highlighted as the sane modern default in the UI.
     pub recommended: bool,
 }
 
 impl Scheme {
+    /// Number of overwrite passes in the scheme.
     pub fn pass_count(&self) -> usize {
         self.passes.len()
     }

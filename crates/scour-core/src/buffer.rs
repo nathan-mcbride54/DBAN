@@ -13,6 +13,7 @@ use std::ptr::NonNull;
 /// historically wanted.
 pub const ALIGNMENT: usize = 4096;
 
+/// A heap buffer aligned to [`ALIGNMENT`], suitable for `O_DIRECT` block I/O.
 pub struct AlignedBuf {
     ptr: NonNull<u8>,
     len: usize,

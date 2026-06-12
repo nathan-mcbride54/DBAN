@@ -39,9 +39,11 @@ pub const CHUNK_SIZE: usize = 4 << 20;
 /// Everything the operator chose for this session.
 #[derive(Clone)]
 pub struct WipeSpec {
+    /// The overwrite scheme to apply.
     pub scheme: Scheme,
     /// Repeat the whole scheme N times (DBAN's "rounds").
     pub rounds: u32,
+    /// Read-back verification policy.
     pub verify: VerifyMode,
     /// Append one final zero pass so the disk reads blank afterwards
     /// (useful after random-heavy schemes).
@@ -89,14 +91,21 @@ impl WipeSpec {
     }
 }
 
+/// The live phase of a running job, surfaced to the UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[repr(u8)]
 pub enum Phase {
+    /// Not yet started.
     Queued = 0,
+    /// Writing a pass (or issuing a firmware command).
     Writing = 1,
+    /// Reading a pass back for verification.
     Verifying = 2,
+    /// Finished successfully.
     Done = 3,
+    /// Finished with an error.
     Failed = 4,
+    /// Stopped at the operator's request.
     Cancelled = 5,
 }
 
@@ -112,6 +121,7 @@ impl Phase {
         }
     }
 
+    /// Short display label for the phase.
     pub fn label(&self) -> &'static str {
         match self {
             Phase::Queued => "queued",
@@ -123,6 +133,7 @@ impl Phase {
         }
     }
 
+    /// True once the job has finished, one way or another.
     pub fn is_terminal(&self) -> bool {
         matches!(self, Phase::Done | Phase::Failed | Phase::Cancelled)
     }
@@ -181,6 +192,7 @@ impl Progress {
         *self.error.lock().unwrap() = Some(msg);
     }
 
+    /// Take a consistent point-in-time copy of the progress for rendering.
     pub fn snapshot(&self) -> ProgressSnapshot {
         ProgressSnapshot {
             work_done: self.work_done.load(Ordering::Relaxed),
@@ -195,15 +207,25 @@ impl Progress {
     }
 }
 
+/// An immutable copy of a job's [`Progress`] at one instant.
 #[derive(Clone, Debug)]
 pub struct ProgressSnapshot {
+    /// Bytes of work completed so far (writes + verifying reads).
     pub work_done: u64,
+    /// Total bytes of work the job will perform.
     pub work_total: u64,
+    /// 1-based index of the pass currently in flight.
     pub pass_index: u32,
+    /// Total number of passes for the job.
     pub pass_count: u32,
+    /// Current phase.
     pub phase: Phase,
+    /// True when there is no meaningful byte progress (firmware erase on real
+    /// hardware); the UI shows a pulse instead of a percentage.
     pub indeterminate: bool,
+    /// Label of the current pass (e.g. `"zeros (0x00)"`).
     pub pass_label: String,
+    /// Error message if the job failed.
     pub error: Option<String>,
 }
 
@@ -214,15 +236,21 @@ impl ProgressSnapshot {
     }
 }
 
+/// The terminal outcome of a job, recorded in the erasure report.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum JobStatus {
+    /// All passes (and verification) completed successfully.
     Success,
+    /// A verification read-back did not match what was written.
     VerifyFailed,
+    /// An I/O or device error occurred.
     Failed,
+    /// The operator cancelled the job.
     Cancelled,
 }
 
 impl JobStatus {
+    /// Short upper-case display label, e.g. `"SUCCESS"`.
     pub fn label(&self) -> &'static str {
         match self {
             JobStatus::Success => "SUCCESS",
@@ -239,9 +267,13 @@ impl JobStatus {
 /// for firmware jobs, distinguished by `firmware`.
 #[derive(Clone, Debug, Serialize)]
 pub struct JobReport {
+    /// Kernel/demo name of the disk.
     pub disk_name: String,
+    /// Device model string.
     pub disk_model: String,
+    /// Device serial number.
     pub disk_serial: String,
+    /// Capacity in bytes.
     pub disk_size_bytes: u64,
     /// Stable id of the method used (scheme id or firmware-method id).
     pub method_id: String,
@@ -249,17 +281,29 @@ pub struct JobReport {
     pub method_name: String,
     /// True when this was a firmware/drive-internal erase rather than overwrite.
     pub firmware: bool,
+    /// Number of scheme rounds (overwrite only; 0 for firmware).
     pub rounds: u32,
+    /// Verification policy used (overwrite only).
     pub verify: VerifyMode,
+    /// Total passes planned (overwrite only).
     pub pass_count: u32,
+    /// Passes actually completed.
     pub passes_completed: u32,
+    /// Final outcome.
     pub status: JobStatus,
+    /// Error message if the job did not succeed.
     pub error: Option<String>,
+    /// Unix start time (seconds).
     pub started_unix: u64,
+    /// Unix finish time (seconds).
     pub finished_unix: u64,
+    /// Wall-clock duration in seconds.
     pub duration_secs: f64,
+    /// Total bytes written (overwrite only).
     pub bytes_written: u64,
+    /// Total bytes read back for verification (overwrite only).
     pub bytes_verified: u64,
+    /// Average write throughput in MiB/s (overwrite only).
     pub avg_write_mib_s: f64,
 }
 
@@ -291,9 +335,11 @@ impl JobReport {
     }
 }
 
-/// A running (or finished) wipe job.
+/// A running (or finished) sanitization job for one disk.
 pub struct JobHandle {
+    /// The disk being sanitized.
     pub disk: Disk,
+    /// Shared progress the UI polls each frame.
     pub progress: Arc<Progress>,
     cancel: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<JobReport>>,
@@ -301,14 +347,17 @@ pub struct JobHandle {
 }
 
 impl JobHandle {
+    /// Ask the worker to stop at the next chunk boundary.
     pub fn request_cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
     }
 
+    /// True if cancellation has been requested.
     pub fn cancel_requested(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
     }
 
+    /// True once the worker thread has exited (successfully or not).
     pub fn is_finished(&self) -> bool {
         self.report.is_some() || self.thread.as_ref().is_none_or(|t| t.is_finished())
     }

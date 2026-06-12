@@ -14,11 +14,16 @@ use scour_core::report::SessionReport;
 use scour_core::safety::SafetyGate;
 use scour_core::sysinfo::{self, SystemInfo};
 
+/// The top-level screen currently shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
+    /// Disk selection and method picker.
     Disks,
+    /// The arming ceremony (phrase + countdown).
     Confirm,
+    /// Live wipe progress.
     Wiping,
+    /// Post-session results.
     Summary,
 }
 
@@ -26,20 +31,27 @@ pub enum Screen {
 /// [`App::schemes`]) or a firmware/drive-internal erase command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MethodChoice {
+    /// A software overwrite scheme, by index into [`App::schemes`].
     Overwrite(usize),
+    /// A firmware/drive-internal erase command.
     Firmware(FirmwareMethod),
 }
 
 impl MethodChoice {
+    /// True when this choice is a firmware method.
     pub fn is_firmware(&self) -> bool {
         matches!(self, MethodChoice::Firmware(_))
     }
 }
 
+/// How the app should leave when it exits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExitAction {
+    /// Return to the shell (hosted mode).
     Quit,
+    /// Reboot the machine (appliance mode).
     Reboot,
+    /// Power the machine off (appliance mode).
     PowerOff,
 }
 
@@ -51,12 +63,14 @@ pub struct SpeedTracker {
 impl SpeedTracker {
     const WINDOW: Duration = Duration::from_secs(5);
 
+    /// Create an empty tracker.
     pub fn new() -> Self {
         SpeedTracker {
             samples: VecDeque::new(),
         }
     }
 
+    /// Record a `(timestamp, work_done)` sample, trimming the rolling window.
     pub fn push(&mut self, now: Instant, work_done: u64) {
         self.samples.push_back((now, work_done));
         while let Some(&(t, _)) = self.samples.front() {
@@ -68,6 +82,7 @@ impl SpeedTracker {
         }
     }
 
+    /// Current throughput estimate in bytes/sec over the rolling window.
     pub fn bytes_per_sec(&self) -> f64 {
         let (Some(&(t0, b0)), Some(&(t1, b1))) = (self.samples.front(), self.samples.back()) else {
             return 0.0;
@@ -79,6 +94,7 @@ impl SpeedTracker {
         (b1.saturating_sub(b0)) as f64 / dt
     }
 
+    /// Estimated time remaining, or `None` when throughput is too low to judge.
     pub fn eta(&self, work_done: u64, work_total: u64) -> Option<Duration> {
         let bps = self.bytes_per_sec();
         if bps <= 1.0 {
@@ -95,46 +111,73 @@ impl Default for SpeedTracker {
     }
 }
 
+/// The entire application state. Pure data + logic; rendering lives in
+/// [`crate::ui`]. Most fields are public so tests and the renderer can read
+/// them, but they are only mutated through the `on_key` / `on_tick` methods.
 pub struct App {
     provider: Box<dyn DiskProvider>,
+    /// True when running against simulated disks.
     pub simulation: bool,
     /// Running as init on the live ISO: quit becomes reboot/power-off.
     pub pid1: bool,
+    /// Host hardware summary.
     pub sys: SystemInfo,
 
+    /// The currently enumerated disks.
     pub disks: Vec<Disk>,
+    /// Index of the highlighted row (disk list or job list).
     pub cursor: usize,
+    /// Names of disks toggled on for erasure.
     pub selected: HashSet<String>,
     /// Firmware capability per disk name, refreshed with the disk list.
     pub supports: HashMap<String, FirmwareSupport>,
 
+    /// All overwrite schemes (firmware methods are appended in `methods`).
     pub schemes: Vec<Scheme>,
     /// Overwrite schemes followed by every firmware method — the picker order.
     pub methods: Vec<MethodChoice>,
+    /// Index of the selected method in `methods`.
     pub method_idx: usize,
+    /// Verify mode (overwrite methods only).
     pub verify: VerifyMode,
+    /// Number of scheme rounds (overwrite methods only).
     pub rounds: u32,
+    /// Whether to append a final zero-blanking pass (overwrite only).
     pub final_blank: bool,
 
+    /// The active screen.
     pub screen: Screen,
+    /// The arming gate while on the confirm screen.
     pub gate: Option<SafetyGate>,
+    /// Running/finished job handles, one per target disk.
     pub jobs: Vec<JobHandle>,
+    /// Throughput trackers paired with `jobs`.
     pub trackers: Vec<SpeedTracker>,
+    /// The assembled session report once all jobs finish.
     pub session_report: Option<SessionReport>,
+    /// Path of the written report, if saved.
     pub saved_report_path: Option<String>,
 
+    /// Transient status message and when it was set.
     pub status: Option<(String, Instant)>,
+    /// Whether the help overlay is open.
     pub show_help: bool,
+    /// Whether the quit-confirmation modal is open.
     pub confirm_quit: bool,
+    /// Index of the job pending a cancel confirmation, if any.
     pub confirm_cancel_job: Option<usize>,
     /// Set while waiting for cancelled jobs to wind down before exiting.
     pub quitting: bool,
     pending_exit: Option<ExitAction>,
+    /// Set to request the event loop exit with the given action.
     pub exit: Option<ExitAction>,
+    /// Animation frame counter for spinners/pulses.
     pub spinner_frame: usize,
 }
 
 impl App {
+    /// Build the app from a disk provider, probing disks immediately. `pid1`
+    /// selects appliance mode (quit becomes reboot/power-off).
     pub fn new(provider: Box<dyn DiskProvider>, pid1: bool) -> Self {
         let simulation = provider.is_simulation();
         let schemes = all_schemes();
@@ -188,6 +231,8 @@ impl App {
         app
     }
 
+    /// Re-enumerate disks and re-probe firmware capability, preserving any
+    /// still-present selections.
     pub fn refresh_disks(&mut self) {
         match self.provider.refresh() {
             Ok(disks) => {
@@ -207,6 +252,7 @@ impl App {
         }
     }
 
+    /// The currently selected method.
     pub fn current_method(&self) -> MethodChoice {
         self.methods[self.method_idx]
     }
@@ -220,6 +266,7 @@ impl App {
         }
     }
 
+    /// The firmware method for the current selection, or `None` for overwrite.
     pub fn current_firmware(&self) -> Option<FirmwareMethod> {
         match self.current_method() {
             MethodChoice::Firmware(m) => Some(m),
@@ -227,6 +274,7 @@ impl App {
         }
     }
 
+    /// True when the selected method is a firmware erase.
     pub fn is_firmware(&self) -> bool {
         self.current_method().is_firmware()
     }
@@ -239,6 +287,7 @@ impl App {
         }
     }
 
+    /// One-paragraph description of the current method.
     pub fn method_description(&self) -> &str {
         match self.current_method() {
             MethodChoice::Overwrite(i) => self.schemes[i].description,
@@ -285,12 +334,14 @@ impl App {
             .collect()
     }
 
+    /// Show a transient status message in the status line.
     pub fn flash(&mut self, msg: String) {
         self.status = Some((msg, Instant::now()));
     }
 
     // -- input ---------------------------------------------------------------
 
+    /// Handle a key press, dispatching to the active screen/modal.
     pub fn on_key(&mut self, key: KeyEvent) {
         // Ctrl+C is always a quit request, never a hard kill mid-wipe.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -532,12 +583,16 @@ impl App {
         }
     }
 
+    /// True while any worker thread is still running.
     pub fn jobs_running(&self) -> bool {
         self.jobs.iter().any(|j| !j.is_finished())
     }
 
     // -- tick ----------------------------------------------------------------
 
+    /// Advance time: animations, the arming countdown, throughput sampling,
+    /// completion detection, and deferred-quit handling. `elapsed` is the time
+    /// since the previous tick.
     pub fn on_tick(&mut self, elapsed: Duration) {
         self.spinner_frame = self.spinner_frame.wrapping_add(1);
 

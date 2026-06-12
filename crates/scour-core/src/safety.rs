@@ -17,6 +17,7 @@
 
 use crate::CoreError;
 
+/// Duration of the final abortable countdown, in milliseconds.
 pub const COUNTDOWN_MS: u64 = 5_000;
 
 /// Proof that the operator completed the arming ceremony. Cannot be
@@ -25,18 +26,26 @@ pub struct ArmToken {
     _private: (),
 }
 
+/// The state of a [`SafetyGate`] as the operator works through the ceremony.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArmState {
     /// Nothing armed; the gate idles here.
     Disarmed,
     /// Operator is typing the confirmation phrase.
-    Typing { typed: String },
+    Typing {
+        /// What the operator has typed so far (upper-cased).
+        typed: String,
+    },
     /// Phrase accepted; final abortable countdown is running.
-    Countdown { remaining_ms: u64 },
+    Countdown {
+        /// Milliseconds remaining before the token is released.
+        remaining_ms: u64,
+    },
     /// Token released. Terminal state — a gate can only fire once.
     Released,
 }
 
+/// The arming state machine that guards every destructive operation.
 pub struct SafetyGate {
     state: ArmState,
     phrase: String,
@@ -63,10 +72,12 @@ impl SafetyGate {
         })
     }
 
+    /// The current state of the ceremony.
     pub fn state(&self) -> &ArmState {
         &self.state
     }
 
+    /// How many disks this gate will arm.
     pub fn disk_count(&self) -> usize {
         self.disk_count
     }
@@ -76,6 +87,7 @@ impl SafetyGate {
         &self.phrase
     }
 
+    /// What the operator has typed so far (empty unless in the typing state).
     pub fn typed(&self) -> &str {
         match &self.state {
             ArmState::Typing { typed } => typed,
@@ -95,12 +107,14 @@ impl SafetyGate {
         }
     }
 
+    /// Delete the last typed character.
     pub fn backspace(&mut self) {
         if let ArmState::Typing { typed } = &mut self.state {
             typed.pop();
         }
     }
 
+    /// True when the typed text exactly equals the required phrase.
     pub fn phrase_matches(&self) -> bool {
         matches!(&self.state, ArmState::Typing { typed } if typed == &self.phrase)
     }
@@ -131,6 +145,7 @@ impl SafetyGate {
         None
     }
 
+    /// Milliseconds left in the countdown, or `None` if not counting down.
     pub fn countdown_remaining_ms(&self) -> Option<u64> {
         match self.state {
             ArmState::Countdown { remaining_ms } => Some(remaining_ms),
@@ -145,6 +160,7 @@ impl SafetyGate {
         }
     }
 
+    /// True if the gate was aborted back to the disarmed state.
     pub fn is_aborted(&self) -> bool {
         self.state == ArmState::Disarmed
     }

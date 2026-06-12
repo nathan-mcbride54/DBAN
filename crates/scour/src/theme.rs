@@ -24,15 +24,25 @@ use ratatui::widgets::BorderType;
 /// uses named ANSI colors that survive a 16-color terminal.
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
+    /// Primary accent (links, highlights, method name).
     pub accent: Color,
+    /// Secondary accent (firmware badge).
     pub accent_alt: Color,
+    /// Success / safe state.
     pub ok: Color,
+    /// Warning / caution.
     pub warn: Color,
+    /// Danger / destructive.
     pub danger: Color,
+    /// Brighter danger, used for badges.
     pub danger_bright: Color,
+    /// Primary body text.
     pub text: Color,
+    /// Brightest text (headings, emphasized values).
     pub bright: Color,
+    /// De-emphasized text.
     pub muted: Color,
+    /// Faintest text and borders.
     pub faint: Color,
     /// Background tint for the row under the cursor.
     pub sel_bg: Color,
@@ -82,6 +92,7 @@ impl Palette {
 /// or a block element — all of which render at exactly one column everywhere.
 #[derive(Clone, Copy, Debug)]
 pub struct Glyphs {
+    /// Block border style (rounded on desktop, plain on the console).
     pub border: BorderType,
     /// Cursor row indicator (a left bar). Trailing space included.
     pub cursor: &'static str,
@@ -132,7 +143,9 @@ impl Glyphs {
 /// Palette + glyphs + style helpers, threaded through every render function.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
+    /// The color palette.
     pub p: Palette,
+    /// The glyph set.
     pub g: Glyphs,
 }
 
@@ -169,33 +182,43 @@ impl Theme {
 
     // -- style helpers -------------------------------------------------------
 
+    /// Bold accent — panel titles and the app name.
     pub fn title(&self) -> Style {
         Style::new().fg(self.p.accent).add_modifier(Modifier::BOLD)
     }
+    /// Bold bright — headings and emphasized values.
     pub fn heading(&self) -> Style {
         Style::new().fg(self.p.bright).add_modifier(Modifier::BOLD)
     }
+    /// Primary body text.
     pub fn text(&self) -> Style {
         Style::new().fg(self.p.text)
     }
+    /// De-emphasized text.
     pub fn muted(&self) -> Style {
         Style::new().fg(self.p.muted)
     }
+    /// Faintest text.
     pub fn faint(&self) -> Style {
         Style::new().fg(self.p.faint)
     }
+    /// Accent-colored (non-bold) text.
     pub fn accent(&self) -> Style {
         Style::new().fg(self.p.accent)
     }
+    /// Success-colored text.
     pub fn ok(&self) -> Style {
         Style::new().fg(self.p.ok)
     }
+    /// Bold warning-colored text.
     pub fn warn(&self) -> Style {
         Style::new().fg(self.p.warn).add_modifier(Modifier::BOLD)
     }
+    /// Bold danger-colored text.
     pub fn danger(&self) -> Style {
         Style::new().fg(self.p.danger).add_modifier(Modifier::BOLD)
     }
+    /// Border / rule color.
     pub fn border(&self) -> Style {
         Style::new().fg(self.p.faint)
     }
