@@ -5,6 +5,12 @@ set -euo pipefail
 
 LABEL="${SCOUR_LABEL:-SCOUR}"
 WORK=/work
+
+if [ ! -d /out ]; then
+    echo "FATAL: /out is not mounted — the host dist/ bind mount is missing." >&2
+    echo "       On Windows Git Bash, run via iso/build.sh (sets MSYS_NO_PATHCONV)." >&2
+    exit 3
+fi
 ISOROOT="$WORK/isoroot"
 INITRAMFS="$WORK/initramfs"
 
@@ -64,12 +70,20 @@ grub-mkstandalone \
     --locales="" --fonts="" \
     "boot/grub/grub.cfg=$ISOROOT/boot/grub/grub.cfg"
 
-mformat -i "$WORK/efiboot.img" -C -f 1440 -N 0 ::  2>/dev/null || \
-    dd if=/dev/zero of="$WORK/efiboot.img" bs=1k count=1440
-mformat -i "$WORK/efiboot.img" ::
-mmd     -i "$WORK/efiboot.img" ::/EFI ::/EFI/BOOT
-mcopy   -i "$WORK/efiboot.img" "$WORK/efi/boot/bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
+# Size the FAT ESP to the actual GRUB EFI binary (which is several MB) plus
+# slack, rounded up to whole MiB — a fixed 1.44M floppy overflows ("Disk full").
+EFI_BYTES=$(stat -c %s "$WORK/efi/boot/bootx64.efi")
+ESP_MIB=$(( (EFI_BYTES / 1048576) + 2 ))
+dd if=/dev/zero of="$WORK/efiboot.img" bs=1M count="$ESP_MIB" status=none
+mkfs.vfat -n SCOUREFI "$WORK/efiboot.img" >/dev/null
+mmd   -i "$WORK/efiboot.img" ::/EFI ::/EFI/BOOT
+mcopy -i "$WORK/efiboot.img" "$WORK/efi/boot/bootx64.efi" ::/EFI/BOOT/BOOTX64.EFI
 cp "$WORK/efiboot.img" "$ISOROOT/boot/grub/efiboot.img"
+
+# Also place the EFI binary directly in the ISO9660 tree so USB UEFI boot works
+# with tools that look for /EFI/BOOT/BOOTX64.EFI (Rufus, plain dd, Ventoy).
+mkdir -p "$ISOROOT/EFI/BOOT"
+cp "$WORK/efi/boot/bootx64.efi" "$ISOROOT/EFI/BOOT/BOOTX64.EFI"
 
 xorriso -as mkisofs \
     -volid "$LABEL" \

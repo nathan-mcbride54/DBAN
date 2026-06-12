@@ -15,13 +15,22 @@
 
 set -euo pipefail
 
+# On Git Bash / MSYS (Windows), the shell rewrites Unix-looking arguments such
+# as the container-side `/out` mount target into Windows paths, which silently
+# breaks the bind mount. Disable that just for this script.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL="*"
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 IMAGE="scour-iso-builder"
 LABEL="SCOUR_$(date +%Y%m%d)"
 
 echo ">> Building ISO builder image..."
-docker build -t "$IMAGE" -f "$HERE/Dockerfile" "$ROOT"
+# Use a relative build context from the repo root. With MSYS_NO_PATHCONV set,
+# an absolute MSYS path like /d/DBAN is not a valid client-side path for
+# `docker build`, whereas `.` is unambiguous on every platform.
+( cd "$ROOT" && docker build -t "$IMAGE" -f iso/Dockerfile . )
 
 echo ">> Producing ISO inside container..."
 mkdir -p "$ROOT/dist"
