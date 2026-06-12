@@ -1,0 +1,6 @@
+# Shell scripts and the init shim must keep LF endings — they run inside Linux
+# containers and on the live appliance. CRLF would break the shebang.
+*.sh   text eol=lf
+iso/init text eol=lf
+Dockerfile text eol=lf
+* text=auto

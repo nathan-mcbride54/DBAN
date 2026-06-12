@@ -1,0 +1,6 @@
+/target
+/dist
+**/*.rs.bk
+*.iso
+.DS_Store
+.claude/
