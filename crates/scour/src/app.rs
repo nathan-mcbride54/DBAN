@@ -1,14 +1,15 @@
 //! Application state machine. Pure logic — no terminal I/O — so every
 //! transition is unit-testable.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use scour_core::algorithm::{all_schemes, Scheme, VerifyMode};
 use scour_core::device::{Disk, DiskProvider};
-use scour_core::engine::{spawn_wipe, JobHandle, WipeSpec};
+use scour_core::engine::{spawn_firmware, spawn_wipe, JobHandle, WipeSpec};
+use scour_core::firmware::{self, FirmwareMethod, FirmwareSupport};
 use scour_core::report::SessionReport;
 use scour_core::safety::SafetyGate;
 use scour_core::sysinfo::{self, SystemInfo};
@@ -19,6 +20,20 @@ pub enum Screen {
     Confirm,
     Wiping,
     Summary,
+}
+
+/// A choice in the method picker: a software overwrite scheme (by index into
+/// [`App::schemes`]) or a firmware/drive-internal erase command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MethodChoice {
+    Overwrite(usize),
+    Firmware(FirmwareMethod),
+}
+
+impl MethodChoice {
+    pub fn is_firmware(&self) -> bool {
+        matches!(self, MethodChoice::Firmware(_))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,9 +105,13 @@ pub struct App {
     pub disks: Vec<Disk>,
     pub cursor: usize,
     pub selected: HashSet<String>,
+    /// Firmware capability per disk name, refreshed with the disk list.
+    pub supports: HashMap<String, FirmwareSupport>,
 
     pub schemes: Vec<Scheme>,
-    pub scheme_idx: usize,
+    /// Overwrite schemes followed by every firmware method — the picker order.
+    pub methods: Vec<MethodChoice>,
+    pub method_idx: usize,
     pub verify: VerifyMode,
     pub rounds: u32,
     pub final_blank: bool,
@@ -119,8 +138,22 @@ impl App {
     pub fn new(provider: Box<dyn DiskProvider>, pid1: bool) -> Self {
         let simulation = provider.is_simulation();
         let schemes = all_schemes();
-        let scheme_idx = schemes.iter().position(|s| s.recommended).unwrap_or(0);
-        let verify = schemes[scheme_idx].default_verify;
+        // Build the picker list: overwrite schemes first, then firmware methods.
+        let mut methods: Vec<MethodChoice> =
+            (0..schemes.len()).map(MethodChoice::Overwrite).collect();
+        for fw in [
+            FirmwareMethod::AtaSecureErase { enhanced: false },
+            FirmwareMethod::AtaSecureErase { enhanced: true },
+            FirmwareMethod::NvmeFormat { crypto: false },
+            FirmwareMethod::NvmeFormat { crypto: true },
+            FirmwareMethod::NvmeSanitize { crypto: false },
+            FirmwareMethod::NvmeSanitize { crypto: true },
+        ] {
+            methods.push(MethodChoice::Firmware(fw));
+        }
+        // Default to the recommended overwrite scheme.
+        let method_idx = schemes.iter().position(|s| s.recommended).unwrap_or(0);
+        let verify = schemes[method_idx].default_verify;
         let mut app = App {
             provider,
             simulation,
@@ -129,8 +162,10 @@ impl App {
             disks: Vec::new(),
             cursor: 0,
             selected: HashSet::new(),
+            supports: HashMap::new(),
             schemes,
-            scheme_idx,
+            methods,
+            method_idx,
             verify,
             rounds: 1,
             final_blank: false,
@@ -158,6 +193,11 @@ impl App {
             Ok(disks) => {
                 let present: HashSet<String> = disks.iter().map(|d| d.name.clone()).collect();
                 self.selected.retain(|name| present.contains(name));
+                // Probe firmware capability (non-destructive) for each disk.
+                self.supports = disks
+                    .iter()
+                    .map(|d| (d.name.clone(), firmware::detect_support(d)))
+                    .collect();
                 self.disks = disks;
                 if self.cursor >= self.disks.len() {
                     self.cursor = self.disks.len().saturating_sub(1);
@@ -167,23 +207,81 @@ impl App {
         }
     }
 
-    pub fn current_scheme(&self) -> &Scheme {
-        &self.schemes[self.scheme_idx]
+    pub fn current_method(&self) -> MethodChoice {
+        self.methods[self.method_idx]
     }
 
-    pub fn spec(&self) -> WipeSpec {
-        WipeSpec {
-            scheme: self.current_scheme().clone(),
-            rounds: self.rounds,
-            verify: self.verify,
-            final_blank: self.final_blank,
+    /// The overwrite scheme for the current method, or `None` if a firmware
+    /// method is selected.
+    pub fn current_scheme(&self) -> Option<&Scheme> {
+        match self.current_method() {
+            MethodChoice::Overwrite(i) => self.schemes.get(i),
+            MethodChoice::Firmware(_) => None,
         }
     }
 
+    pub fn current_firmware(&self) -> Option<FirmwareMethod> {
+        match self.current_method() {
+            MethodChoice::Firmware(m) => Some(m),
+            MethodChoice::Overwrite(_) => None,
+        }
+    }
+
+    pub fn is_firmware(&self) -> bool {
+        self.current_method().is_firmware()
+    }
+
+    /// Human-readable name of the current method.
+    pub fn method_name(&self) -> &str {
+        match self.current_method() {
+            MethodChoice::Overwrite(i) => self.schemes[i].name,
+            MethodChoice::Firmware(m) => m.name(),
+        }
+    }
+
+    pub fn method_description(&self) -> &str {
+        match self.current_method() {
+            MethodChoice::Overwrite(i) => self.schemes[i].description,
+            MethodChoice::Firmware(m) => m.description(),
+        }
+    }
+
+    /// The overwrite `WipeSpec` for the current method, or `None` for firmware.
+    pub fn spec(&self) -> Option<WipeSpec> {
+        self.current_scheme().map(|scheme| WipeSpec {
+            scheme: scheme.clone(),
+            rounds: self.rounds,
+            verify: self.verify,
+            final_blank: self.final_blank,
+        })
+    }
+
+    /// Does `disk` support the currently selected firmware method? Always true
+    /// for overwrite methods (every disk can be overwritten).
+    pub fn disk_supports_current(&self, disk: &Disk) -> bool {
+        match self.current_firmware() {
+            None => true,
+            Some(method) => self
+                .supports
+                .get(&disk.name)
+                .is_some_and(|s| s.supports(method)),
+        }
+    }
+
+    /// All selected, unlocked disks.
     pub fn selected_disks(&self) -> Vec<&Disk> {
         self.disks
             .iter()
-            .filter(|d| self.selected.contains(&d.name))
+            .filter(|d| self.selected.contains(&d.name) && !d.is_locked())
+            .collect()
+    }
+
+    /// The disks that will actually be erased by the current method: selected,
+    /// unlocked, and (for firmware) capable of the chosen command.
+    pub fn target_disks(&self) -> Vec<&Disk> {
+        self.selected_disks()
+            .into_iter()
+            .filter(|d| self.disk_supports_current(d))
             .collect()
     }
 
@@ -231,17 +329,22 @@ impl App {
             }
             KeyCode::Char(' ') | KeyCode::Enter => self.toggle_current(),
             KeyCode::Left | KeyCode::Char('[') => {
-                self.scheme_idx = (self.scheme_idx + self.schemes.len() - 1) % self.schemes.len();
-                self.verify = self.current_scheme().default_verify;
+                self.method_idx = (self.method_idx + self.methods.len() - 1) % self.methods.len();
+                self.sync_verify_default();
             }
             KeyCode::Right | KeyCode::Char(']') => {
-                self.scheme_idx = (self.scheme_idx + 1) % self.schemes.len();
-                self.verify = self.current_scheme().default_verify;
+                self.method_idx = (self.method_idx + 1) % self.methods.len();
+                self.sync_verify_default();
             }
-            KeyCode::Char('v') => self.verify = self.verify.cycle(),
-            KeyCode::Char('+') | KeyCode::Char('=') => self.rounds = (self.rounds + 1).min(9),
-            KeyCode::Char('-') => self.rounds = self.rounds.saturating_sub(1).max(1),
-            KeyCode::Char('b') => self.final_blank = !self.final_blank,
+            // The verify / rounds / blank options apply to overwrite only.
+            KeyCode::Char('v') if !self.is_firmware() => self.verify = self.verify.cycle(),
+            KeyCode::Char('+') | KeyCode::Char('=') if !self.is_firmware() => {
+                self.rounds = (self.rounds + 1).min(9)
+            }
+            KeyCode::Char('-') if !self.is_firmware() => {
+                self.rounds = self.rounds.saturating_sub(1).max(1)
+            }
+            KeyCode::Char('b') if !self.is_firmware() => self.final_blank = !self.final_blank,
             KeyCode::Char('r') => {
                 self.refresh_disks();
                 self.flash("disk list rescanned".to_string());
@@ -271,9 +374,36 @@ impl App {
         }
     }
 
+    /// When the current method is an overwrite scheme, reset the verify mode to
+    /// that scheme's default. No-op for firmware methods.
+    fn sync_verify_default(&mut self) {
+        if let Some(scheme) = self.current_scheme() {
+            self.verify = scheme.default_verify;
+        }
+    }
+
     fn begin_confirmation(&mut self) {
-        let count = self.selected.len();
-        match SafetyGate::new(count) {
+        if self.selected_disks().is_empty() {
+            self.flash("select at least one disk first (space toggles)".to_string());
+            return;
+        }
+        // For firmware methods, only capable disks are targeted.
+        let targets = self.target_disks().len();
+        if targets == 0 {
+            self.flash(format!(
+                "no selected disk supports {} — pick another method",
+                self.method_name()
+            ));
+            return;
+        }
+        if targets < self.selected_disks().len() {
+            let skipped = self.selected_disks().len() - targets;
+            self.flash(format!(
+                "{skipped} selected disk(s) don't support {} and will be skipped",
+                self.method_name()
+            ));
+        }
+        match SafetyGate::new(targets) {
             Ok(gate) => {
                 self.gate = Some(gate);
                 self.screen = Screen::Confirm;
@@ -463,17 +593,19 @@ impl App {
     }
 
     fn start_jobs(&mut self, token: scour_core::safety::ArmToken) {
+        let method = self.current_method();
         let spec = self.spec();
-        let targets: Vec<Disk> = self
-            .disks
-            .iter()
-            .filter(|d| self.selected.contains(&d.name))
-            .cloned()
-            .collect();
+        let targets: Vec<Disk> = self.target_disks().into_iter().cloned().collect();
         self.jobs.clear();
         self.trackers.clear();
         for disk in &targets {
-            match spawn_wipe(disk, &spec, &token) {
+            let result = match method {
+                MethodChoice::Overwrite(_) => {
+                    spawn_wipe(disk, spec.as_ref().expect("overwrite has a spec"), &token)
+                }
+                MethodChoice::Firmware(fw) => spawn_firmware(disk, fw, &token),
+            };
+            match result {
                 Ok(handle) => {
                     self.jobs.push(handle);
                     self.trackers.push(SpeedTracker::new());

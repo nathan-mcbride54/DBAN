@@ -123,6 +123,7 @@ impl DiskProvider for DemoProvider {
                 kind: spec.kind,
                 removable: spec.removable,
                 lock: spec.lock,
+                simulated: true,
                 throttle_bps: Some(spec.throttle),
             });
         }

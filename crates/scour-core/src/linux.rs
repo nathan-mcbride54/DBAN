@@ -73,6 +73,7 @@ impl DiskProvider for SysfsProvider {
                 size_bytes,
                 name,
                 path: dev_path,
+                simulated: false,
                 throttle_bps: None,
             });
         }

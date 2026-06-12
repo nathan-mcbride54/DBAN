@@ -52,6 +52,7 @@ impl DiskProvider for FastProvider {
                 kind: MediaKind::Ssd,
                 removable: false,
                 lock,
+                simulated: true,
                 throttle_bps: None, // no pacing: finish ASAP
             });
         }
@@ -126,7 +127,7 @@ fn full_wipe_run_to_summary() {
     let mut app = new_app();
     app.on_key(key(' ')); // select sda
                           // Pick the fastest method: Quick Zero Fill (id "zero"), single pass.
-    while app.current_scheme().id != "zero" {
+    while app.current_scheme().map(|s| s.id) != Some("zero") {
         app.on_key(special(KeyCode::Right));
     }
     app.on_key(key('s')); // arm
@@ -212,16 +213,16 @@ fn tiny_terminal_does_not_panic() {
 }
 
 #[test]
-fn scheme_navigation_wraps() {
+fn method_navigation_wraps() {
     let mut app = new_app();
-    let total = app.schemes.len();
-    let start = app.scheme_idx;
+    let total = app.methods.len();
+    let start = app.method_idx;
     for _ in 0..total {
         app.on_key(special(KeyCode::Right));
     }
-    assert_eq!(app.scheme_idx, start, "a full cycle returns to the start");
+    assert_eq!(app.method_idx, start, "a full cycle returns to the start");
     app.on_key(special(KeyCode::Left));
-    assert_eq!(app.scheme_idx, (start + total - 1) % total);
+    assert_eq!(app.method_idx, (start + total - 1) % total);
 }
 
 #[test]

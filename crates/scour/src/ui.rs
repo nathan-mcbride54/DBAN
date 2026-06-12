@@ -181,8 +181,13 @@ fn draw_disk_table(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
 
 fn disk_row<'a>(app: &App, t: &Theme, disk: &'a Disk) -> Row<'a> {
     let is_sel = app.selected.contains(&disk.name);
+    // A selected disk that the chosen firmware method can't touch is shown as
+    // "skip" rather than "WILL ERASE", so the operator is never surprised.
+    let unsupported = is_sel && !disk.is_locked() && !app.disk_supports_current(disk);
     let marker = if disk.is_locked() {
         Span::styled(t.g.locked, t.faint())
+    } else if unsupported {
+        Span::styled(t.g.sel_off, t.muted())
     } else if is_sel {
         Span::styled(t.g.sel_on, t.danger())
     } else {
@@ -190,10 +195,15 @@ fn disk_row<'a>(app: &App, t: &Theme, disk: &'a Disk) -> Row<'a> {
     };
     let state = match disk.lock {
         Some(reason) => Span::styled(reason.label(), t.warn()),
+        None if unsupported => Span::styled("skip (n/a)", t.faint()),
         None if is_sel => Span::styled("WILL ERASE", t.danger()),
         None => Span::styled("ready", t.muted()),
     };
-    let name_style = if is_sel { t.heading() } else { t.text() };
+    let name_style = if is_sel && !unsupported {
+        t.heading()
+    } else {
+        t.text()
+    };
 
     Row::new(vec![
         Cell::from(marker),
@@ -223,65 +233,110 @@ fn draw_method_panel(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         ])
         .split(inner);
 
-    let scheme = app.current_scheme();
-    let spec = app.spec();
-    let total = spec.pass_list().len();
-
     // -- name line --
     let mut name = vec![
         Span::styled("‹ ", t.faint()),
-        Span::styled(scheme.name, t.title()),
+        Span::styled(app.method_name().to_string(), t.title()),
         Span::styled(" ›", t.faint()),
         Span::styled(
-            format!("   {}/{}", app.scheme_idx + 1, app.schemes.len()),
+            format!("   {}/{}", app.method_idx + 1, app.methods.len()),
             t.muted(),
         ),
-        Span::styled(format!("   {} pass(es)", scheme.pass_count()), t.muted()),
     ];
-    if scheme.recommended {
+    if let Some(scheme) = app.current_scheme() {
+        name.push(Span::styled(
+            format!("   {} pass(es)", scheme.pass_count()),
+            t.muted(),
+        ));
+        if scheme.recommended {
+            name.push(Span::raw("   "));
+            name.push(Span::styled(" RECOMMENDED ", t.badge(t.p.ok)));
+        }
+    } else {
         name.push(Span::raw("   "));
-        name.push(Span::styled(" RECOMMENDED ", t.badge(t.p.ok)));
+        name.push(Span::styled(" FIRMWARE ", t.badge(t.p.accent_alt)));
     }
     f.render_widget(Paragraph::new(Line::from(name)), parts[0]);
 
-    // -- description (clipped to two lines) --
+    // -- description --
     f.render_widget(
-        Paragraph::new(Span::styled(scheme.description, t.muted())).wrap(Wrap { trim: true }),
+        Paragraph::new(Span::styled(
+            app.method_description().to_string(),
+            t.muted(),
+        ))
+        .wrap(Wrap { trim: true }),
         parts[1],
     );
 
-    // -- options --
-    let mut opt_spans = Vec::new();
-    opt_spans.extend(chip(t, "verify", spec.verify.label()));
-    opt_spans.push(Span::raw("  "));
-    opt_spans.extend(chip(t, "rounds", &app.rounds.to_string()));
-    opt_spans.push(Span::raw("  "));
-    opt_spans.extend(chip(
-        t,
-        "final blank",
-        if app.final_blank { "on" } else { "off" },
-    ));
-    opt_spans.push(Span::styled(
-        format!("    {total} write pass(es)"),
-        t.faint(),
-    ));
-    f.render_widget(Paragraph::new(Line::from(opt_spans)), parts[2]);
+    // -- options (overwrite) or capability summary (firmware) --
+    if let Some(spec) = app.spec() {
+        let total = spec.pass_list().len();
+        let mut opt_spans = Vec::new();
+        opt_spans.extend(chip(t, "verify", spec.verify.label()));
+        opt_spans.push(Span::raw("  "));
+        opt_spans.extend(chip(t, "rounds", &app.rounds.to_string()));
+        opt_spans.push(Span::raw("  "));
+        opt_spans.extend(chip(
+            t,
+            "final blank",
+            if app.final_blank { "on" } else { "off" },
+        ));
+        opt_spans.push(Span::styled(
+            format!("    {total} write pass(es)"),
+            t.faint(),
+        ));
+        f.render_widget(Paragraph::new(Line::from(opt_spans)), parts[2]);
+    } else {
+        let selected = app.selected_disks();
+        let capable = app.target_disks().len();
+        let line = if selected.is_empty() {
+            Line::from(Span::styled(
+                "Drive-internal purge — select disks to see which support it.",
+                t.faint(),
+            ))
+        } else {
+            Line::from(vec![
+                Span::styled(
+                    format!(
+                        "supported by {capable} of {} selected disk(s)",
+                        selected.len()
+                    ),
+                    if capable == 0 { t.warn() } else { t.ok() },
+                ),
+                Span::styled("   no overwrite passes", t.faint()),
+            ])
+        };
+        f.render_widget(Paragraph::new(line), parts[2]);
+    }
 
-    // -- SSD advisory --
-    if app
+    // -- advisory --
+    let advisory = if app.is_firmware() {
+        Some(Line::from(vec![
+            Span::styled(" PURGE ", t.badge(t.p.accent_alt)),
+            Span::styled(
+                " issues a command to the drive's own firmware; unsupported \
+                 selected disks are skipped.",
+                t.muted(),
+            ),
+        ]))
+    } else if app
         .selected_disks()
         .iter()
         .any(|d| d.kind == MediaKind::Ssd)
     {
-        let advisory = Line::from(vec![
+        Some(Line::from(vec![
             Span::styled(" SSD ", t.badge(t.p.warn)),
             Span::styled(
-                " overwrites can't reach over-provisioned cells — use firmware \
-                 Secure Erase for a true flash purge.",
+                " overwrites can't reach over-provisioned cells — a firmware \
+                 erase method is a truer flash purge.",
                 t.muted(),
             ),
-        ]);
-        f.render_widget(Paragraph::new(advisory).wrap(Wrap { trim: true }), parts[3]);
+        ]))
+    } else {
+        None
+    };
+    if let Some(line) = advisory {
+        f.render_widget(Paragraph::new(line).wrap(Wrap { trim: true }), parts[3]);
     }
 }
 
@@ -320,7 +375,8 @@ fn draw_confirm(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         )),
         Line::from(""),
     ];
-    for d in app.selected_disks() {
+    // Only the disks the chosen method can actually erase.
+    for d in app.target_disks() {
         lines.push(Line::from(vec![
             Span::styled(format!("{}  ", t.g.sel_on), t.danger()),
             Span::styled(format!("{:<10} ", d.name), t.heading()),
@@ -329,18 +385,18 @@ fn draw_confirm(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         ]));
     }
     lines.push(Line::from(""));
-    let spec = app.spec();
+    let detail = match app.spec() {
+        Some(spec) => format!(
+            "   {} write pass(es)   verify {}",
+            spec.pass_list().len(),
+            spec.verify.label()
+        ),
+        None => "   firmware purge (drive-internal)".to_string(),
+    };
     lines.push(Line::from(vec![
         Span::styled("Method  ", t.faint()),
-        Span::styled(spec.scheme.name, t.accent()),
-        Span::styled(
-            format!(
-                "   {} write pass(es)   verify {}",
-                spec.pass_list().len(),
-                spec.verify.label()
-            ),
-            t.muted(),
-        ),
+        Span::styled(app.method_name().to_string(), t.accent()),
+        Span::styled(detail, t.muted()),
     ]));
     lines.push(Line::from(""));
 
@@ -449,14 +505,25 @@ fn draw_wiping(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
             Phase::Cancelled => t.p.warn,
             _ => t.p.accent,
         };
-        let label = match &snap.error {
-            Some(err) => clip(err, sub[1].width.saturating_sub(2) as usize),
-            None => format!("{:.1}%", snap.ratio() * 100.0),
+        // Firmware erase on real hardware reports no byte progress: show a
+        // bouncing pulse and an "erasing…" label instead of a false percentage.
+        let indeterminate = snap.indeterminate && !snap.phase.is_terminal();
+        let (ratio, label) = if let Some(err) = &snap.error {
+            (
+                snap.ratio(),
+                clip(err, sub[1].width.saturating_sub(2) as usize),
+            )
+        } else if indeterminate {
+            let phase = (app.spinner_frame % 40) as f64 / 40.0;
+            let pulse = 0.5 - 0.5 * (phase * std::f64::consts::TAU).cos();
+            (0.15 + 0.7 * pulse, "erasing…".to_string())
+        } else {
+            (snap.ratio(), format!("{:.1}%", snap.ratio() * 100.0))
         };
         let gauge = Gauge::default()
             .gauge_style(Style::new().fg(gauge_color).bg(t.p.sel_bg))
             .use_unicode(t.g.fine_gauge)
-            .ratio(snap.ratio())
+            .ratio(ratio)
             .label(Span::styled(label, t.heading()));
         f.render_widget(gauge, sub[1]);
     }
@@ -513,7 +580,7 @@ fn draw_summary(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
             Cell::from(Span::styled(job.disk_name.clone(), t.heading())),
             Cell::from(Span::styled(clip(&job.disk_model, 24), t.muted())),
             Cell::from(Span::styled(job.status.label(), style)),
-            Cell::from(Span::styled(job.scheme_name.clone(), t.text())),
+            Cell::from(Span::styled(job.method_name.clone(), t.text())),
             Cell::from(
                 Line::from(format!("{}/{}", job.passes_completed, job.pass_count))
                     .alignment(Alignment::Right),

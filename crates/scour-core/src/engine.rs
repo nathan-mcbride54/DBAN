@@ -27,6 +27,7 @@ use serde::Serialize;
 use crate::algorithm::{Pass, PassKind, Scheme, VerifyMode};
 use crate::buffer::AlignedBuf;
 use crate::device::Disk;
+use crate::firmware::{self, FirmwareMethod};
 use crate::prng::Prng;
 use crate::safety::ArmToken;
 use crate::CoreError;
@@ -134,6 +135,9 @@ pub struct Progress {
     pass_index: AtomicU32,
     pass_count: AtomicU32,
     phase: AtomicU8,
+    /// True when the underlying operation reports no byte progress (firmware
+    /// erase on real hardware): the UI should show a pulse, not a percentage.
+    indeterminate: AtomicBool,
     pass_label: Mutex<String>,
     error: Mutex<Option<String>>,
 }
@@ -146,9 +150,18 @@ impl Progress {
             pass_index: AtomicU32::new(0),
             pass_count: AtomicU32::new(pass_count),
             phase: AtomicU8::new(Phase::Queued as u8),
+            indeterminate: AtomicBool::new(false),
             pass_label: Mutex::new(String::new()),
             error: Mutex::new(None),
         }
+    }
+
+    fn set_work_done(&self, bytes: u64) {
+        self.work_done.store(bytes, Ordering::Relaxed);
+    }
+
+    fn set_indeterminate(&self, value: bool) {
+        self.indeterminate.store(value, Ordering::Relaxed);
     }
 
     fn add_work(&self, bytes: u64) {
@@ -175,6 +188,7 @@ impl Progress {
             pass_index: self.pass_index.load(Ordering::Relaxed),
             pass_count: self.pass_count.load(Ordering::Relaxed),
             phase: Phase::from_u8(self.phase.load(Ordering::Relaxed)),
+            indeterminate: self.indeterminate.load(Ordering::Relaxed),
             pass_label: self.pass_label.lock().unwrap().clone(),
             error: self.error.lock().unwrap().clone(),
         }
@@ -188,6 +202,7 @@ pub struct ProgressSnapshot {
     pub pass_index: u32,
     pub pass_count: u32,
     pub phase: Phase,
+    pub indeterminate: bool,
     pub pass_label: String,
     pub error: Option<String>,
 }
@@ -218,15 +233,22 @@ impl JobStatus {
     }
 }
 
-/// The permanent record of one disk's wipe, embedded in erasure reports.
+/// The permanent record of one disk's sanitization, embedded in erasure
+/// reports. Covers both overwrite jobs and firmware-erase jobs; the
+/// overwrite-specific fields (`rounds`, `pass_count`, byte counters) are zero
+/// for firmware jobs, distinguished by `firmware`.
 #[derive(Clone, Debug, Serialize)]
 pub struct JobReport {
     pub disk_name: String,
     pub disk_model: String,
     pub disk_serial: String,
     pub disk_size_bytes: u64,
-    pub scheme_id: String,
-    pub scheme_name: String,
+    /// Stable id of the method used (scheme id or firmware-method id).
+    pub method_id: String,
+    /// Human-readable method name.
+    pub method_name: String,
+    /// True when this was a firmware/drive-internal erase rather than overwrite.
+    pub firmware: bool,
     pub rounds: u32,
     pub verify: VerifyMode,
     pub pass_count: u32,
@@ -239,6 +261,34 @@ pub struct JobReport {
     pub bytes_written: u64,
     pub bytes_verified: u64,
     pub avg_write_mib_s: f64,
+}
+
+impl JobReport {
+    /// Minimal report skeleton for `disk`, used for panics and as the base for
+    /// both job kinds.
+    fn skeleton(disk: &Disk, method_id: String, method_name: String, firmware: bool) -> Self {
+        JobReport {
+            disk_name: disk.name.clone(),
+            disk_model: disk.model.clone(),
+            disk_serial: disk.serial.clone(),
+            disk_size_bytes: disk.size_bytes,
+            method_id,
+            method_name,
+            firmware,
+            rounds: 0,
+            verify: VerifyMode::None,
+            pass_count: 0,
+            passes_completed: 0,
+            status: JobStatus::Failed,
+            error: None,
+            started_unix: 0,
+            finished_unix: 0,
+            duration_secs: 0.0,
+            bytes_written: 0,
+            bytes_verified: 0,
+            avg_write_mib_s: 0.0,
+        }
+    }
 }
 
 /// A running (or finished) wipe job.
@@ -269,25 +319,11 @@ impl JobHandle {
             let done = self.thread.as_ref().is_some_and(|t| t.is_finished());
             if done {
                 if let Some(handle) = self.thread.take() {
-                    self.report = Some(handle.join().unwrap_or_else(|_| JobReport {
-                        disk_name: self.disk.name.clone(),
-                        disk_model: self.disk.model.clone(),
-                        disk_serial: self.disk.serial.clone(),
-                        disk_size_bytes: self.disk.size_bytes,
-                        scheme_id: String::new(),
-                        scheme_name: String::new(),
-                        rounds: 0,
-                        verify: VerifyMode::None,
-                        pass_count: 0,
-                        passes_completed: 0,
-                        status: JobStatus::Failed,
-                        error: Some("worker thread panicked".to_string()),
-                        started_unix: 0,
-                        finished_unix: 0,
-                        duration_secs: 0.0,
-                        bytes_written: 0,
-                        bytes_verified: 0,
-                        avg_write_mib_s: 0.0,
+                    self.report = Some(handle.join().unwrap_or_else(|_| {
+                        let mut r =
+                            JobReport::skeleton(&self.disk, String::new(), String::new(), false);
+                        r.error = Some("worker thread panicked".to_string());
+                        r
                     }));
                 }
             }
@@ -329,6 +365,100 @@ pub fn spawn_wipe(disk: &Disk, spec: &WipeSpec, _token: &ArmToken) -> Result<Job
         thread: Some(thread),
         report: None,
     })
+}
+
+/// Start a firmware/drive-internal erase of one disk (ATA Secure Erase, NVMe
+/// Format / Sanitize). Like [`spawn_wipe`], requires the safety [`ArmToken`].
+/// On real hardware the command reports no progress, so the job is marked
+/// indeterminate; demo disks animate a determinate bar.
+pub fn spawn_firmware(
+    disk: &Disk,
+    method: FirmwareMethod,
+    _token: &ArmToken,
+) -> Result<JobHandle, CoreError> {
+    if let Some(lock) = disk.lock {
+        return Err(CoreError::DiskLocked(
+            disk.name.clone(),
+            lock.label().to_string(),
+        ));
+    }
+    let progress = Arc::new(Progress::new(disk.size_bytes.max(1), 1));
+    // Real hardware gives no byte progress; simulated disks animate a bar.
+    progress.set_indeterminate(!disk.simulated);
+    let cancel = Arc::new(AtomicBool::new(false));
+
+    let worker_disk = disk.clone();
+    let worker_progress = Arc::clone(&progress);
+    let worker_cancel = Arc::clone(&cancel);
+
+    let thread = thread::Builder::new()
+        .name(format!("fw-{}", disk.name))
+        .spawn(move || run_firmware_job(worker_disk, method, worker_progress, worker_cancel))
+        .map_err(CoreError::Io)?;
+
+    Ok(JobHandle {
+        disk: disk.clone(),
+        progress,
+        cancel,
+        thread: Some(thread),
+        report: None,
+    })
+}
+
+fn run_firmware_job(
+    disk: Disk,
+    method: FirmwareMethod,
+    progress: Arc<Progress>,
+    cancel: Arc<AtomicBool>,
+) -> JobReport {
+    let started_unix = unix_now();
+    let t0 = Instant::now();
+    progress.set_pass(1, method.name().to_string());
+    progress.set_phase(Phase::Writing);
+
+    let size = disk.size_bytes;
+    let result = firmware::execute(&disk, method, &cancel, |frac| {
+        progress.set_work_done((frac * size as f64) as u64);
+    });
+
+    let (status, error) = match result {
+        Ok(()) => (JobStatus::Success, None),
+        Err(firmware::FirmwareError::Cancelled) => (JobStatus::Cancelled, None),
+        Err(e) => (JobStatus::Failed, Some(e.to_string())),
+    };
+
+    let phase = match status {
+        JobStatus::Success => {
+            progress.set_work_done(size);
+            Phase::Done
+        }
+        JobStatus::Cancelled => Phase::Cancelled,
+        _ => Phase::Failed,
+    };
+    if let Some(msg) = &error {
+        progress.set_error(msg.clone());
+    }
+    progress.set_phase(phase);
+
+    let mut report = JobReport::skeleton(
+        &disk,
+        method.id().to_string(),
+        method.name().to_string(),
+        true,
+    );
+    report.pass_count = 1;
+    report.passes_completed = if status == JobStatus::Success { 1 } else { 0 };
+    report.status = status;
+    report.error = error;
+    report.started_unix = started_unix;
+    report.finished_unix = unix_now();
+    report.duration_secs = t0.elapsed().as_secs_f64();
+    report.bytes_written = if status == JobStatus::Success {
+        size
+    } else {
+        0
+    };
+    report
 }
 
 // ---------------------------------------------------------------------------
@@ -398,30 +528,29 @@ fn run_job(
 
     let duration = t0.elapsed();
     let write_secs = stats.write_time.as_secs_f64();
-    JobReport {
-        disk_name: disk.name.clone(),
-        disk_model: disk.model.clone(),
-        disk_serial: disk.serial.clone(),
-        disk_size_bytes: disk.size_bytes,
-        scheme_id: spec.scheme.id.to_string(),
-        scheme_name: spec.scheme.name.to_string(),
-        rounds: spec.rounds,
-        verify: spec.verify,
-        pass_count: passes.len() as u32,
-        passes_completed: stats.passes_completed,
-        status,
-        error,
-        started_unix,
-        finished_unix: unix_now(),
-        duration_secs: duration.as_secs_f64(),
-        bytes_written: stats.bytes_written,
-        bytes_verified: stats.bytes_verified,
-        avg_write_mib_s: if write_secs > 0.0 {
-            stats.bytes_written as f64 / (1024.0 * 1024.0) / write_secs
-        } else {
-            0.0
-        },
-    }
+    let mut report = JobReport::skeleton(
+        &disk,
+        spec.scheme.id.to_string(),
+        spec.scheme.name.to_string(),
+        false,
+    );
+    report.rounds = spec.rounds;
+    report.verify = spec.verify;
+    report.pass_count = passes.len() as u32;
+    report.passes_completed = stats.passes_completed;
+    report.status = status;
+    report.error = error;
+    report.started_unix = started_unix;
+    report.finished_unix = unix_now();
+    report.duration_secs = duration.as_secs_f64();
+    report.bytes_written = stats.bytes_written;
+    report.bytes_verified = stats.bytes_verified;
+    report.avg_write_mib_s = if write_secs > 0.0 {
+        stats.bytes_written as f64 / (1024.0 * 1024.0) / write_secs
+    } else {
+        0.0
+    };
+    report
 }
 
 fn execute(
@@ -741,6 +870,7 @@ mod tests {
             kind: MediaKind::Ssd,
             removable: false,
             lock: None,
+            simulated: true,
             throttle_bps: None,
         }
     }

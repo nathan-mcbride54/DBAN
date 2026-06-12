@@ -46,4 +46,22 @@ fn main() {
         term.draw(|f| ui::draw(f, &app, &theme)).unwrap();
         dump(&term, &format!("Disks {w}x{h}"));
     }
+
+    // Show a firmware method selected, with an NVMe disk chosen.
+    if let Some(idx) = app.disks.iter().position(|d| d.name == "nvme0n1") {
+        app.cursor = idx;
+        app.on_key(ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char(' '),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+    while !app.is_firmware() {
+        app.on_key(ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Right,
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| ui::draw(f, &app, &theme)).unwrap();
+    dump(&term, "Firmware method 100x30");
 }

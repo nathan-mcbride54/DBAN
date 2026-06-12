@@ -89,6 +89,10 @@ pub struct Disk {
     pub removable: bool,
     /// `Some(reason)` makes the disk permanently unselectable this session.
     pub lock: Option<LockReason>,
+    /// True for a simulated (temp-file-backed) disk. The engine and firmware
+    /// modules use this — never the bus label — to decide between real device
+    /// I/O / ioctl and simulation, since demo disks carry realistic bus labels.
+    pub simulated: bool,
     /// Demo-mode rate limit in bytes/sec, so simulated wipes progress at a
     /// believable, watchable pace. Always `None` for real hardware.
     #[serde(skip)]
