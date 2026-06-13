@@ -104,10 +104,11 @@ crates/
     examples/dump.rs   Renders each screen to text for eyeballing.
     tests/             app_flow, firmware_flow, ui_integrity.
 iso/
-  Dockerfile       Two-stage build: static musl binary → hybrid ISO.
-  build.sh         One command to produce dist/dban.iso (needs Docker).
+  Dockerfile       Two-stage, multi-arch build: static musl binary → ISO.
+  build.sh         Produce dist/dban.iso on Linux/macOS/Git Bash (needs Docker).
+  build.ps1        The same, native on Windows PowerShell.
   init             The shell shim that execs dban as PID 1.
-  mkimage.sh       Assembles the BIOS+UEFI bootable image.
+  mkimage.sh       Assembles the bootable image (BIOS+UEFI / UEFI-only).
 ```
 
 ---
@@ -132,10 +133,10 @@ files live under your temp dir in `dban-demo/`.
 ### Run the test suite
 
 ```sh
-cargo test --all      # 53 tests: engine round-trips, PRNG, the safety gate,
-                      # firmware capability + simulation, the full
-                      # wipe-to-report flow, and UI render-integrity guards
-                      # (every glyph one column wide; borders never drift)
+cargo test --all      # engine round-trips, PRNG, the safety gate, firmware
+                      # capability + simulation (ATA / NVMe / Opal / HPA-DCO),
+                      # report signing, the full wipe-to-report flow, and UI
+                      # render-integrity guards (every glyph one column wide)
 cargo clippy --all-targets -- -D warnings
 cargo doc --no-deps --workspace
 ```
@@ -145,7 +146,13 @@ cargo doc --no-deps --workspace
 Requires Docker. Everything else happens inside the container.
 
 ```sh
-./iso/build.sh        # → dist/dban.iso  (hybrid BIOS + UEFI)
+# Linux / macOS / Git Bash
+./iso/build.sh                # → dist/dban.iso  (x86_64, hybrid BIOS + UEFI)
+./iso/build.sh arm64          # → dist/dban.iso  (aarch64, UEFI-only)
+
+# Windows (native PowerShell)
+.\iso\build.ps1               # x86_64
+.\iso\build.ps1 -Arch arm64   # aarch64 (needs Docker binfmt/qemu emulation)
 ```
 
 Write it to a USB stick (this erases the stick):
@@ -268,26 +275,16 @@ plain JSON; verify it with any Ed25519 implementation using the embedded
 
 ---
 
-## Roadmap
+## Hardware validation note
 
-Done:
-
-- ✅ **ATA `SECURITY ERASE UNIT` / NVMe `Format` + `SANITIZE`** (true flash
-  purge) — capability-probed and wired into the UI; see [Firmware
-  purge](#firmware-purge-drive-internal-capability-gated).
-
-Next, in priority order:
-
-- Opal/TCG crypto-erase for self-encrypting drives.
-- HPA/DCO detection and removal so hidden sectors are also cleared.
-- Detached report signing (Ed25519) for tamper-evident compliance artifacts.
-- ARM64 ISO target.
-
-The firmware commands are written against the documented Linux ioctl ABIs
-(`SG_IO` ATA pass-through, `NVME_IOCTL_ADMIN_CMD`) and compiled in CI; because
-they can only be meaningfully exercised against real hardware, the full
-end-to-end path is covered by the simulation provider in tests, and capability
-probing is non-destructive.
+The firmware-level commands — ATA Secure Erase, NVMe Format/Sanitize, the
+TCG Opal revert, and HPA/DCO removal — are written against the documented Linux
+ioctl ABIs (`SG_IO` ATA pass-through, `NVME_IOCTL_ADMIN_CMD`, SCSI/NVMe security
+protocol) and are compiled in CI for both x86_64 and aarch64. They can only be
+*meaningfully exercised* against real hardware, so the full end-to-end flow is
+covered in tests by the simulation provider, and all capability probing is
+non-destructive. Treat a first run against an unfamiliar drive model as you
+would any low-level disk tool: verify the result.
 
 ---
 

@@ -17,6 +17,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          # The live ISO links musl for both architectures; cross-check them so
+          # target-specific issues (e.g. musl's c_int ioctl request type) are
+          # caught here rather than in the ISO build.
+          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all -- --check
@@ -24,6 +28,10 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --all
+      - name: Cross-check musl (x86_64)
+        run: cargo clippy --workspace --target x86_64-unknown-linux-musl -- -D warnings
+      - name: Cross-check musl (aarch64)
+        run: cargo check --workspace --target aarch64-unknown-linux-musl
 
   iso:
     name: build ISO

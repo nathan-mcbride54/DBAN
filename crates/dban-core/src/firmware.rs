@@ -621,7 +621,9 @@ mod linux {
         };
 
         // SAFETY: hdr and its referenced buffers outlive the call.
-        let rc = unsafe { libc::ioctl(file.as_raw_fd(), SG_IO, &mut hdr) };
+        // The ioctl request arg is c_ulong on glibc but c_int on musl; `as _`
+        // adapts to whichever this target uses.
+        let rc = unsafe { libc::ioctl(file.as_raw_fd(), SG_IO as _, &mut hdr) };
         if rc < 0 {
             return Err(io_err("SG_IO ATA pass-through"));
         }
@@ -719,7 +721,9 @@ mod linux {
             info: 0,
         };
         // SAFETY: hdr and its buffers outlive the call.
-        let rc = unsafe { libc::ioctl(file.as_raw_fd(), SG_IO, &mut hdr) };
+        // The ioctl request arg is c_ulong on glibc but c_int on musl; `as _`
+        // adapts to whichever this target uses.
+        let rc = unsafe { libc::ioctl(file.as_raw_fd(), SG_IO as _, &mut hdr) };
         if rc < 0 {
             return Err(io_err("SG_IO ATA pass-through (lba48)"));
         }
@@ -834,7 +838,7 @@ mod linux {
             .open(path)
             .map_err(|e| FirmwareError::Io(e.to_string()))?;
         // SAFETY: cmd and any buffer it points at outlive the call.
-        let rc = unsafe { libc::ioctl(file.as_raw_fd(), NVME_IOCTL_ADMIN_CMD, cmd) };
+        let rc = unsafe { libc::ioctl(file.as_raw_fd(), NVME_IOCTL_ADMIN_CMD as _, cmd) };
         if rc < 0 {
             return Err(io_err("NVME_IOCTL_ADMIN_CMD"));
         }
@@ -1035,7 +1039,9 @@ mod linux {
             info: 0,
         };
         // SAFETY: hdr and buffers outlive the call.
-        let rc = unsafe { libc::ioctl(file.as_raw_fd(), SG_IO, &mut hdr) };
+        // The ioctl request arg is c_ulong on glibc but c_int on musl; `as _`
+        // adapts to whichever this target uses.
+        let rc = unsafe { libc::ioctl(file.as_raw_fd(), SG_IO as _, &mut hdr) };
         if rc < 0 {
             return Err(io_err("SG_IO SECURITY PROTOCOL"));
         }
