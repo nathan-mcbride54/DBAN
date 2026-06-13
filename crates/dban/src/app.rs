@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use dban_core::algorithm::{all_schemes, Scheme, VerifyMode};
-use dban_core::device::{Disk, DiskProvider};
+use dban_core::device::{human_bytes, Disk, DiskProvider};
 use dban_core::engine::{spawn_firmware, spawn_wipe, JobHandle, WipeSpec};
-use dban_core::firmware::{self, FirmwareMethod, FirmwareSupport};
+use dban_core::firmware::{self, FirmwareMethod, FirmwareSupport, HiddenAreas};
 use dban_core::report::SessionReport;
 use dban_core::safety::SafetyGate;
 use dban_core::sysinfo::{self, SystemInfo};
@@ -131,6 +131,8 @@ pub struct App {
     pub selected: HashSet<String>,
     /// Firmware capability per disk name, refreshed with the disk list.
     pub supports: HashMap<String, FirmwareSupport>,
+    /// HPA/DCO hidden-area analysis per disk name, refreshed with the list.
+    pub hidden: HashMap<String, HiddenAreas>,
 
     /// All overwrite schemes (firmware methods are appended in `methods`).
     pub schemes: Vec<Scheme>,
@@ -208,6 +210,7 @@ impl App {
             cursor: 0,
             selected: HashSet::new(),
             supports: HashMap::new(),
+            hidden: HashMap::new(),
             schemes,
             methods,
             method_idx,
@@ -241,10 +244,15 @@ impl App {
             Ok(disks) => {
                 let present: HashSet<String> = disks.iter().map(|d| d.name.clone()).collect();
                 self.selected.retain(|name| present.contains(name));
-                // Probe firmware capability (non-destructive) for each disk.
+                // Probe firmware capability and hidden areas (both
+                // non-destructive) for each disk.
                 self.supports = disks
                     .iter()
                     .map(|d| (d.name.clone(), firmware::detect_support(d)))
+                    .collect();
+                self.hidden = disks
+                    .iter()
+                    .map(|d| (d.name.clone(), firmware::detect_hidden_areas(d)))
                     .collect();
                 self.disks = disks;
                 if self.cursor >= self.disks.len() {
@@ -252,6 +260,63 @@ impl App {
                 }
             }
             Err(e) => self.flash(format!("disk scan failed: {e}")),
+        }
+    }
+
+    /// Hidden-area analysis for the disk under the cursor, if any.
+    pub fn current_hidden(&self) -> Option<&HiddenAreas> {
+        let disk = self.disks.get(self.cursor)?;
+        self.hidden.get(&disk.name)
+    }
+
+    /// True if any selected disk still has hidden (HPA/DCO) sectors that the
+    /// wipe would miss.
+    pub fn selected_have_hidden(&self) -> bool {
+        self.selected_disks()
+            .iter()
+            .any(|d| self.hidden.get(&d.name).is_some_and(|h| h.any()))
+    }
+
+    /// Reveal HPA/DCO hidden sectors on the cursor disk and grow its size so the
+    /// wipe covers the whole drive. Bound to `h` on the disks screen.
+    fn reveal_current_hidden(&mut self) {
+        let Some(disk) = self.disks.get(self.cursor) else {
+            return;
+        };
+        if disk.is_locked() {
+            self.flash(format!("{} is locked — cannot modify it", disk.name));
+            return;
+        }
+        match self.hidden.get(&disk.name) {
+            Some(h) if h.any() => {}
+            _ => {
+                self.flash(format!("{} has no hidden areas", disk.name));
+                return;
+            }
+        }
+        let disk = disk.clone();
+        match firmware::reveal_hidden_areas(&disk) {
+            Ok(full_bytes) => {
+                let gained = full_bytes.saturating_sub(disk.size_bytes);
+                if let Some(d) = self.disks.get_mut(self.cursor) {
+                    d.size_bytes = full_bytes;
+                }
+                // Re-probe so the indicator clears.
+                if let Some(d) = self.disks.get(self.cursor) {
+                    self.hidden
+                        .insert(d.name.clone(), firmware::detect_hidden_areas(d));
+                }
+                self.flash(format!(
+                    "revealed {} hidden on {} — full {} will be wiped",
+                    human_bytes(gained),
+                    disk.name,
+                    human_bytes(full_bytes)
+                ));
+            }
+            Err(e) => self.flash(format!(
+                "could not reveal hidden area on {}: {e}",
+                disk.name
+            )),
         }
     }
 
@@ -399,6 +464,8 @@ impl App {
                 self.rounds = self.rounds.saturating_sub(1).max(1)
             }
             KeyCode::Char('b') if !self.is_firmware() => self.final_blank = !self.final_blank,
+            KeyCode::Char('h') => self.reveal_current_hidden(),
+            KeyCode::Char('a') => self.toggle_select_all(),
             KeyCode::Char('r') => {
                 self.refresh_disks();
                 self.flash("disk list rescanned".to_string());
@@ -425,6 +492,28 @@ impl App {
         let name = disk.name.clone();
         if !self.selected.remove(&name) {
             self.selected.insert(name);
+        }
+    }
+
+    /// Select every unlocked disk, or clear the selection if all are already
+    /// selected. Bound to `a` on the disks screen.
+    fn toggle_select_all(&mut self) {
+        let unlocked: Vec<String> = self
+            .disks
+            .iter()
+            .filter(|d| !d.is_locked())
+            .map(|d| d.name.clone())
+            .collect();
+        if unlocked.is_empty() {
+            return;
+        }
+        let all_selected = unlocked.iter().all(|n| self.selected.contains(n));
+        if all_selected {
+            self.selected.clear();
+            self.flash("cleared selection".to_string());
+        } else {
+            self.selected = unlocked.into_iter().collect();
+            self.flash("selected all unlocked disks".to_string());
         }
     }
 

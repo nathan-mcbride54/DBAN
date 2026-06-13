@@ -97,6 +97,45 @@ fn firmware_methods_are_offered() {
 }
 
 #[test]
+fn hidden_area_reveal_grows_disk() {
+    // The DemoProvider's sda advertises 192 MiB but hides a 64 MiB HPA.
+    let mut app = App::new(
+        Box::new(dban_core::demo::DemoProvider::new().unwrap()),
+        false,
+    );
+    let idx = app.disks.iter().position(|d| d.name == "sda").unwrap();
+    let before = app.disks[idx].size_bytes;
+    assert!(
+        app.hidden.get("sda").unwrap().any(),
+        "sda starts with hidden area"
+    );
+
+    app.cursor = idx;
+    app.on_key(key('h')); // reveal
+
+    let after = app.disks[idx].size_bytes;
+    assert!(after > before, "revealing should grow the disk size");
+    assert_eq!(after, 256 * 1024 * 1024);
+    assert!(
+        !app.hidden.get("sda").unwrap().any(),
+        "hidden area cleared after reveal"
+    );
+}
+
+#[test]
+fn select_all_then_clear() {
+    let mut app = App::new(
+        Box::new(dban_core::demo::DemoProvider::new().unwrap()),
+        false,
+    );
+    let unlocked = app.disks.iter().filter(|d| !d.is_locked()).count();
+    app.on_key(key('a'));
+    assert_eq!(app.selected.len(), unlocked, "a selects all unlocked disks");
+    app.on_key(key('a'));
+    assert!(app.selected.is_empty(), "a again clears the selection");
+}
+
+#[test]
 fn capability_is_detected_per_bus() {
     let app = app();
     let sata = app.supports.get("sda").unwrap();

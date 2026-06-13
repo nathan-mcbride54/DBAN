@@ -193,10 +193,13 @@ fn disk_row<'a>(app: &App, t: &Theme, disk: &'a Disk) -> Row<'a> {
     } else {
         Span::styled(t.g.sel_off, t.muted())
     };
+    // Does this disk hide sectors (HPA/DCO) the wipe would otherwise miss?
+    let has_hidden = !disk.is_locked() && app.hidden.get(&disk.name).is_some_and(|h| h.any());
     let state = match disk.lock {
         Some(reason) => Span::styled(reason.label(), t.warn()),
         None if unsupported => Span::styled("skip (n/a)", t.faint()),
         None if is_sel => Span::styled("WILL ERASE", t.danger()),
+        None if has_hidden => Span::styled("hidden area", t.warn()),
         None => Span::styled("ready", t.muted()),
     };
     let name_style = if is_sel && !unsupported {
@@ -204,13 +207,15 @@ fn disk_row<'a>(app: &App, t: &Theme, disk: &'a Disk) -> Row<'a> {
     } else {
         t.text()
     };
+    // Highlight the size in amber when it understates the true capacity.
+    let size_style = if has_hidden { t.warn() } else { t.text() };
 
     Row::new(vec![
         Cell::from(marker),
         Cell::from(Span::styled(disk.name.clone(), name_style)),
         Cell::from(Span::styled(disk.model.clone(), t.text())),
         Cell::from(
-            Line::from(Span::styled(disk.size_human(), t.text())).alignment(Alignment::Right),
+            Line::from(Span::styled(disk.size_human(), size_style)).alignment(Alignment::Right),
         ),
         Cell::from(Span::styled(disk.bus.label(), t.muted())),
         Cell::from(Span::styled(disk.kind.label(), t.muted())),
@@ -309,8 +314,17 @@ fn draw_method_panel(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         f.render_widget(Paragraph::new(line), parts[2]);
     }
 
-    // -- advisory --
-    let advisory = if app.is_firmware() {
+    // -- advisory -- (hidden areas take priority: they silently lose coverage)
+    let advisory = if app.selected_have_hidden() {
+        Some(Line::from(vec![
+            Span::styled(" HIDDEN ", t.badge(t.p.warn)),
+            Span::styled(
+                " a selected disk hides sectors (HPA/DCO) — press h to reveal \
+                 them, or the wipe will miss the top of the drive.",
+                t.muted(),
+            ),
+        ]))
+    } else if app.is_firmware() {
         Some(Line::from(vec![
             Span::styled(" PURGE ", t.badge(t.p.accent_alt)),
             Span::styled(
@@ -655,10 +669,11 @@ fn draw_hints(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
         Screen::Disks => &[
             ("up/dn", "move"),
             ("spc", "select"),
+            ("a", "all"),
             ("</>", "method"),
             ("v", "verify"),
-            ("+/-", "rounds"),
             ("b", "blank"),
+            ("h", "reveal"),
             ("r", "rescan"),
             ("s", "START"),
             ("?", "help"),
@@ -716,10 +731,10 @@ fn draw_help(f: &mut Frame, t: &Theme, area: Rect) {
         Line::from(vec![Span::styled("Disks screen", t.heading())]),
         Line::from("  up/down or j/k   move the cursor"),
         Line::from("  space or enter   toggle a disk for erasure"),
+        Line::from("  a                select all unlocked disks (or clear)"),
         Line::from("  < / >  or [ / ]  change wipe method"),
-        Line::from("  v                cycle verify mode (off / last / all)"),
-        Line::from("  + / -            repeat the method for N rounds"),
-        Line::from("  b                toggle a final zero-blanking pass"),
+        Line::from("  v / + - / b      verify mode / rounds / final blank"),
+        Line::from("  h                reveal HPA/DCO hidden sectors on a disk"),
         Line::from("  s                arm and start (requires the typed phrase)"),
         Line::from(""),
         Line::from(Span::styled(
@@ -727,7 +742,11 @@ fn draw_help(f: &mut Frame, t: &Theme, area: Rect) {
             t.muted(),
         )),
         Line::from(Span::styled(
-            "Random passes are verified by regenerating their seed stream.",
+            "A disk showing 'hidden area' hides sectors above its reported size;",
+            t.muted(),
+        )),
+        Line::from(Span::styled(
+            "press h to reveal them so the wipe covers the whole drive.",
             t.muted(),
         )),
         Line::from(""),

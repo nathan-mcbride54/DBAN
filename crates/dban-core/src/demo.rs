@@ -23,6 +23,10 @@ struct DemoSpec {
     lock: Option<LockReason>,
     /// Simulated sustained throughput, bytes/sec.
     throttle: u64,
+    /// Hidden sectors beyond the advertised size (simulated HPA/DCO): the
+    /// backing file is made this much larger than `size`, so revealing the
+    /// hidden area expands the wipe to cover it.
+    hidden: u64,
 }
 
 const SPECS: [DemoSpec; 5] = [
@@ -30,12 +34,13 @@ const SPECS: [DemoSpec; 5] = [
         name: "sda",
         model: "Seagate Barracuda ST2000 (sim)",
         serial: "Z4Z0DEMO",
-        size: 256 * MIB,
+        size: 192 * MIB,
         bus: Bus::Sata,
         kind: MediaKind::Hdd,
         removable: false,
         lock: None,
         throttle: 14 * MIB,
+        hidden: 64 * MIB, // simulated HPA: 64 MiB hidden above the 192 MiB seen
     },
     DemoSpec {
         name: "sdb",
@@ -47,6 +52,7 @@ const SPECS: [DemoSpec; 5] = [
         removable: false,
         lock: None,
         throttle: 52 * MIB,
+        hidden: 0,
     },
     DemoSpec {
         name: "nvme0n1",
@@ -58,6 +64,7 @@ const SPECS: [DemoSpec; 5] = [
         removable: false,
         lock: None,
         throttle: 110 * MIB,
+        hidden: 0,
     },
     DemoSpec {
         name: "sdc",
@@ -69,6 +76,7 @@ const SPECS: [DemoSpec; 5] = [
         removable: true,
         lock: None,
         throttle: 9 * MIB,
+        hidden: 0,
     },
     DemoSpec {
         name: "sdd",
@@ -80,6 +88,7 @@ const SPECS: [DemoSpec; 5] = [
         removable: true,
         lock: Some(LockReason::BootMedium),
         throttle: 9 * MIB,
+        hidden: 0,
     },
 ];
 
@@ -114,8 +123,10 @@ impl DiskProvider for DemoProvider {
                 .truncate(false)
                 .open(&path)?;
             // Sparse on every mainstream filesystem; bytes appear as the
-            // engine writes them.
-            file.set_len(spec.size)?;
+            // engine writes them. The file is made `size + hidden` bytes so a
+            // simulated HPA/DCO can be detected (file len > advertised size)
+            // and revealed.
+            file.set_len(spec.size + spec.hidden)?;
             disks.push(Disk {
                 path,
                 name: spec.name.to_string(),
@@ -150,11 +161,22 @@ mod tests {
         assert!(p.is_simulation());
         // Exactly one disk simulates the locked boot medium.
         assert_eq!(disks.iter().filter(|d| d.is_locked()).count(), 1);
-        // Backing files exist with the advertised size.
+        // Backing files exist and are at least the advertised size (sda's file
+        // is larger to simulate a hidden HPA).
         for d in &disks {
             let meta = std::fs::metadata(&d.path).unwrap();
-            assert_eq!(meta.len(), d.size_bytes);
+            assert!(meta.len() >= d.size_bytes);
             assert!(d.throttle_bps.is_some());
         }
+
+        // sda advertises 192 MiB but its 256 MiB backing file hides 64 MiB,
+        // which detect_hidden_areas should surface.
+        let sda = disks.iter().find(|d| d.name == "sda").unwrap();
+        let hidden = crate::firmware::detect_hidden_areas(sda);
+        assert!(hidden.has_hpa(), "sda should report a hidden HPA");
+        assert_eq!(hidden.hidden_bytes(), 64 * MIB);
+        // The other disks have nothing hidden.
+        let nvme = disks.iter().find(|d| d.name == "nvme0n1").unwrap();
+        assert!(!crate::firmware::detect_hidden_areas(nvme).any());
     }
 }

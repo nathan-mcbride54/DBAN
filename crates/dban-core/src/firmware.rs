@@ -212,6 +212,116 @@ pub fn detect_support(disk: &Disk) -> FirmwareSupport {
     }
 }
 
+/// Hidden-sector analysis for an ATA disk: the Host Protected Area (HPA) and
+/// Device Configuration Overlay (DCO) can shrink the user-addressable range so
+/// that an overwrite misses the top of the disk. All counts are in logical
+/// sectors.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct HiddenAreas {
+    /// Sectors the OS can currently address.
+    pub current_sectors: u64,
+    /// Sectors addressable after removing the HPA (READ NATIVE MAX).
+    pub native_sectors: u64,
+    /// Sectors addressable after also removing the DCO (the true capacity).
+    pub real_sectors: u64,
+    /// Logical sector size in bytes.
+    pub sector_size: u32,
+}
+
+impl HiddenAreas {
+    /// No hidden areas: every count equals the current addressable size.
+    pub fn none(current_sectors: u64, sector_size: u32) -> Self {
+        HiddenAreas {
+            current_sectors,
+            native_sectors: current_sectors,
+            real_sectors: current_sectors,
+            sector_size: sector_size.max(512),
+        }
+    }
+
+    /// A Host Protected Area is hiding sectors.
+    pub fn has_hpa(&self) -> bool {
+        self.native_sectors > self.current_sectors
+    }
+
+    /// A Device Configuration Overlay is hiding sectors.
+    pub fn has_dco(&self) -> bool {
+        self.real_sectors > self.native_sectors
+    }
+
+    /// Any sectors are hidden from the current addressable range.
+    pub fn any(&self) -> bool {
+        self.real_sectors > self.current_sectors
+    }
+
+    /// Hidden sectors (HPA + DCO combined).
+    pub fn hidden_sectors(&self) -> u64 {
+        self.real_sectors.saturating_sub(self.current_sectors)
+    }
+
+    /// Hidden capacity in bytes.
+    pub fn hidden_bytes(&self) -> u64 {
+        self.hidden_sectors() * self.sector_size as u64
+    }
+
+    /// True full capacity in bytes once everything is revealed.
+    pub fn full_bytes(&self) -> u64 {
+        self.real_sectors * self.sector_size as u64
+    }
+}
+
+/// Detect HPA/DCO hidden areas. Non-destructive. For simulated disks the
+/// "hidden" extent is the difference between the backing file's real length and
+/// the advertised size, so the feature can be exercised end to end.
+pub fn detect_hidden_areas(disk: &Disk) -> HiddenAreas {
+    let sector = 512u32;
+    if disk.simulated {
+        let real = std::fs::metadata(&disk.path)
+            .map(|m| m.len())
+            .unwrap_or(disk.size_bytes);
+        let current = disk.size_bytes;
+        if real > current {
+            return HiddenAreas {
+                current_sectors: current / sector as u64,
+                native_sectors: real / sector as u64, // modelled entirely as HPA
+                real_sectors: real / sector as u64,
+                sector_size: sector,
+            };
+        }
+        return HiddenAreas::none(current / sector as u64, sector);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if disk.bus == Bus::Sata {
+            if let Ok(h) = linux::detect_hidden_ata(&disk.path, disk.size_bytes) {
+                return h;
+            }
+        }
+    }
+    HiddenAreas::none(disk.size_bytes / sector as u64, sector)
+}
+
+/// Remove HPA and DCO so the whole disk becomes addressable. Returns the new
+/// full capacity in bytes. For simulated disks this simply reports the backing
+/// file's real length (the file is already that big, so the engine can wipe it
+/// all).
+pub fn reveal_hidden_areas(disk: &Disk) -> Result<u64, FirmwareError> {
+    let h = detect_hidden_areas(disk);
+    if !h.any() {
+        return Ok(disk.size_bytes);
+    }
+    if disk.simulated {
+        return Ok(h.full_bytes());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if disk.bus == Bus::Sata {
+            return linux::reveal_hidden_ata(&disk.path);
+        }
+    }
+    Err(FirmwareError::Unsupported)
+}
+
 /// Synthesize plausible capabilities for the simulated demo disks so every
 /// firmware method appears at least once in the picker.
 fn demo_support(disk: &Disk) -> FirmwareSupport {
@@ -347,7 +457,7 @@ mod linux {
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use super::{FirmwareError, FirmwareSupport};
+    use super::{FirmwareError, FirmwareSupport, HiddenAreas};
 
     const SG_IO: libc::c_ulong = 0x2285;
     const SG_DXFER_FROM_DEV: libc::c_int = -3;
@@ -516,6 +626,163 @@ mod linux {
             ata_frozen: frozen,
             ..Default::default()
         })
+    }
+
+    /// Issue a 48-bit ATA command with no data transfer, requesting CK_COND so
+    /// the drive returns its output registers in the sense buffer, and parse the
+    /// 48-bit LBA from the SAT "ATA Status Return Descriptor". Used by
+    /// READ NATIVE MAX ADDRESS EXT (0x27) and SET MAX ADDRESS EXT (0x37).
+    fn ata_lba48_ret(
+        path: &Path,
+        features: u8,
+        command: u8,
+        lba: u64,
+    ) -> Result<u64, FirmwareError> {
+        use std::os::unix::io::AsRawFd;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| FirmwareError::Io(e.to_string()))?;
+
+        // EXTEND=1 (48-bit), CK_COND=1 (return registers), protocol 3 (non-data).
+        let flags = 0x01 | 0x20; // CK_COND | EXTEND
+        let cdb: [u8; 16] = [
+            ATA_PASS_THROUGH_16,
+            (3u8 << 1) | 0x01, // protocol non-data + EXTEND
+            flags,
+            0,
+            features,
+            ((lba >> 40) & 0xff) as u8,
+            0,
+            ((lba >> 24) & 0xff) as u8,
+            (lba & 0xff) as u8,
+            ((lba >> 32) & 0xff) as u8,
+            ((lba >> 8) & 0xff) as u8,
+            0,
+            ((lba >> 16) & 0xff) as u8,
+            0,
+            command,
+            0,
+        ];
+
+        let mut sense = [0u8; 32];
+        let mut cdb = cdb;
+        let mut hdr = SgIoHdr {
+            interface_id: b'S' as libc::c_int,
+            dxfer_direction: SG_DXFER_NONE,
+            cmd_len: cdb.len() as u8,
+            mx_sb_len: sense.len() as u8,
+            iovec_count: 0,
+            dxfer_len: 0,
+            dxferp: std::ptr::null_mut(),
+            cmdp: cdb.as_mut_ptr(),
+            sbp: sense.as_mut_ptr(),
+            timeout: 30_000,
+            flags: 0,
+            pack_id: 0,
+            usr_ptr: std::ptr::null_mut(),
+            status: 0,
+            masked_status: 0,
+            msg_status: 0,
+            sb_len_wr: 0,
+            host_status: 0,
+            driver_status: 0,
+            resid: 0,
+            duration: 0,
+            info: 0,
+        };
+        // SAFETY: hdr and its buffers outlive the call.
+        let rc = unsafe { libc::ioctl(file.as_raw_fd(), SG_IO, &mut hdr) };
+        if rc < 0 {
+            return Err(io_err("SG_IO ATA pass-through (lba48)"));
+        }
+        // Descriptor-format sense: the ATA Return Descriptor (code 0x09) sits at
+        // offset 8. Its layout: [0]=0x09 [1]=len [2]=flags [3]=error [4]=count_hi
+        // [5]=count_lo [6]=lba(31:24) [7]=lba(7:0) [8]=lba(39:32) [9]=lba(15:8)
+        // [10]=lba(47:40) [11]=lba(23:16) [12]=device [13]=status.
+        if sense[0] == 0x72 && sense[8] == 0x09 {
+            let d = &sense[8..];
+            let lba_low = d[7] as u64; // 7:0
+            let lba_mid = d[9] as u64; // 15:8
+            let lba_hi = d[11] as u64; // 23:16
+            let lba_3 = d[6] as u64; // 31:24
+            let lba_4 = d[8] as u64; // 39:32
+            let lba_5 = d[10] as u64; // 47:40
+            let max_lba = lba_low
+                | (lba_mid << 8)
+                | (lba_hi << 16)
+                | (lba_3 << 24)
+                | (lba_4 << 32)
+                | (lba_5 << 40);
+            // The returned LBA is the highest addressable sector; +1 = count.
+            return Ok(max_lba + 1);
+        }
+        Err(FirmwareError::Io(
+            "ATA return descriptor not present".into(),
+        ))
+    }
+
+    /// Detect HPA/DCO hidden sectors on an ATA disk.
+    pub fn detect_hidden_ata(
+        path: &Path,
+        advertised_bytes: u64,
+    ) -> Result<HiddenAreas, FirmwareError> {
+        // Logical sector size from IDENTIFY words 117-118 when valid, else 512.
+        let mut id = [0u8; 512];
+        ata_passthrough(path, 0, 1, 0, 0xEC, &mut id)?;
+        let word = |i: usize| -> u16 { u16::from_le_bytes([id[i * 2], id[i * 2 + 1]]) };
+        let logical_words = u32::from(word(117)) | (u32::from(word(118)) << 16);
+        let sector_size = if word(106) & (1 << 12) != 0 && logical_words > 0 {
+            logical_words * 2
+        } else {
+            512
+        };
+        let current = advertised_bytes / sector_size as u64;
+
+        // HPA: READ NATIVE MAX ADDRESS EXT (0x27) gives the native capacity.
+        let native = ata_lba48_ret(path, 0, 0x27, 0)
+            .unwrap_or(current)
+            .max(current);
+
+        // DCO: DEVICE CONFIGURATION IDENTIFY (0xB1 / feature 0xC2), 512-byte data.
+        // Words 3-4 hold the real max sectors (LBA count).
+        let real = {
+            let mut buf = [0u8; 512];
+            match ata_passthrough(path, 0xC2, 1, 0, 0xB1, &mut buf) {
+                Ok(()) => {
+                    let w = |i: usize| u16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]) as u64;
+                    let dco_max = w(3) | (w(4) << 16) | (w(5) << 32);
+                    dco_max.max(native)
+                }
+                Err(_) => native, // DCO not supported
+            }
+        };
+
+        Ok(HiddenAreas {
+            current_sectors: current,
+            native_sectors: native,
+            real_sectors: real,
+            sector_size,
+        })
+    }
+
+    /// Remove HPA (SET MAX ADDRESS EXT) and DCO (DEVICE CONFIGURATION RESTORE),
+    /// returning the resulting full capacity in bytes.
+    pub fn reveal_hidden_ata(path: &Path) -> Result<u64, FirmwareError> {
+        let h = detect_hidden_ata(path, 0)?;
+        // DEVICE CONFIGURATION RESTORE (0xB1 / feature 0xC0) drops the DCO first.
+        if h.has_dco() {
+            let mut empty: [u8; 0] = [];
+            let _ = ata_passthrough(path, 0xC0, 0, 0, 0xB1, &mut empty);
+        }
+        // SET MAX ADDRESS EXT (0x37) to the native max removes the HPA. Volatile
+        // bit (feature 0) not set, so the change persists.
+        let native = ata_lba48_ret(path, 0, 0x27, 0)?;
+        let _ = ata_lba48_ret(path, 0, 0x37, native.saturating_sub(1))?;
+        // Re-read to report the new capacity.
+        let after = detect_hidden_ata(path, 0)?;
+        Ok(after.real_sectors * after.sector_size as u64)
     }
 
     /// ATA Security Erase: SET PASSWORD (0xF1) then ERASE UNIT (0xF4).
@@ -723,6 +990,44 @@ mod tests {
             ..Default::default()
         };
         assert!(s.methods().is_empty(), "frozen drive offers no erase");
+    }
+
+    #[test]
+    fn hidden_area_math() {
+        let h = HiddenAreas {
+            current_sectors: 100,
+            native_sectors: 120,
+            real_sectors: 150,
+            sector_size: 512,
+        };
+        assert!(h.has_hpa() && h.has_dco() && h.any());
+        assert_eq!(h.hidden_sectors(), 50);
+        assert_eq!(h.hidden_bytes(), 50 * 512);
+        assert_eq!(h.full_bytes(), 150 * 512);
+        let clean = HiddenAreas::none(100, 512);
+        assert!(!clean.any() && !clean.has_hpa() && !clean.has_dco());
+    }
+
+    #[test]
+    fn simulated_hidden_detect_and_reveal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("disk.img");
+        // Backing file is 4 MiB but the disk advertises only 3 MiB: 1 MiB HPA.
+        std::fs::write(&path, vec![0u8; 4 << 20]).unwrap();
+        let d = disk(Bus::Demo, path, 3 << 20);
+
+        let h = detect_hidden_areas(&d);
+        assert!(h.has_hpa());
+        assert_eq!(h.hidden_bytes(), 1 << 20);
+        assert_eq!(h.full_bytes(), 4 << 20);
+        assert_eq!(reveal_hidden_areas(&d).unwrap(), 4 << 20);
+
+        // A disk whose file matches its size has nothing hidden.
+        let path2 = dir.path().join("clean.img");
+        std::fs::write(&path2, vec![0u8; 1 << 20]).unwrap();
+        let c = disk(Bus::Demo, path2, 1 << 20);
+        assert!(!detect_hidden_areas(&c).any());
+        assert_eq!(reveal_hidden_areas(&c).unwrap(), 1 << 20);
     }
 
     #[test]
