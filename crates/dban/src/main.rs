@@ -40,7 +40,15 @@ fn main() {
     }
 
     let pid1 = is_pid1();
-    let (provider, sim) = choose_provider(force_demo, force_real, pid1);
+    let (mut provider, _sim0) = choose_provider(force_demo, force_real, pid1);
+
+    // Safe, non-interactive disk inventory: enumerate and print, never wipe.
+    if args.iter().any(|a| a == "--list") {
+        list_disks(provider.as_mut());
+        return;
+    }
+    let sim = _sim0;
+
     if let Err(e) = run(provider, pid1) {
         // Never leave the terminal in raw mode on the way out.
         let _ = restore_terminal();
@@ -65,12 +73,60 @@ fn print_usage() {
          OPTIONS:\n\
          \x20   --demo      Force the simulation provider (safe temp-file disks).\n\
          \x20   --real      Force real hardware discovery (Linux, needs root).\n\
+         \x20   --list      Print the detected disks and exit (read-only).\n\
          \x20   --version   Print version and exit.\n\
          \x20   --help      Show this help.\n\n\
          With no flag, DBAN uses real hardware when run as root on Linux,\n\
          and the simulation provider otherwise.",
         dban_core::VERSION
     );
+}
+
+/// Print a read-only inventory of the detected disks (the `--list` flag). Never
+/// touches any device; useful for scripting and verifying detection.
+fn list_disks(provider: &mut dyn DiskProvider) {
+    let disks = match provider.refresh() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("dban: disk scan failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    if disks.is_empty() {
+        println!("No eligible disks detected.");
+        return;
+    }
+    println!(
+        "{:<11} {:<28} {:>10} {:<6} {:<5} STATE",
+        "DEVICE", "MODEL", "SIZE", "BUS", "TYPE"
+    );
+    for d in &disks {
+        let mut notes = Vec::new();
+        if let Some(lock) = d.lock {
+            notes.push(lock.label().to_string());
+        }
+        if dban_core::firmware::detect_support(d).any() {
+            notes.push("firmware-erase".to_string());
+        }
+        if dban_core::firmware::detect_hidden_areas(d).any() {
+            notes.push("hidden-area".to_string());
+        }
+        let state = if notes.is_empty() {
+            "ready".to_string()
+        } else {
+            notes.join(", ")
+        };
+        let model: String = d.model.chars().take(28).collect();
+        println!(
+            "{:<11} {:<28} {:>10} {:<6} {:<5} {}",
+            d.name,
+            model,
+            d.size_human(),
+            d.bus.label(),
+            d.kind.label(),
+            state
+        );
+    }
 }
 
 /// PID 1 on Linux is the init process — our appliance role.

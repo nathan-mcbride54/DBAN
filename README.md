@@ -125,10 +125,17 @@ or Linux and never touches a real device.
 cargo run -p dban -- --demo
 ```
 
-Select a disk with `space`, pick a method with `<` / `>`, press `s`, and watch
-a real (simulated) wipe with live progress. The demo SATA and NVMe disks
-advertise firmware-erase support, so you can exercise that path too. Backing
-files live under your temp dir in `dban-demo/`.
+Select a disk with `space` (or `a` for all), pick a method with `<` / `>`,
+press `s`, and watch a real (simulated) wipe with live progress. The demo SATA
+and NVMe disks advertise firmware-erase support and one carries a hidden HPA, so
+you can exercise those paths too. Backing files live under your temp dir in
+`dban-demo/`.
+
+For a read-only inventory (no TUI, never wipes), use `--list`:
+
+```sh
+cargo run -p dban -- --demo --list
+```
 
 ### Run the test suite
 
