@@ -7,7 +7,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::engine::JobReport;
+use crate::signing::ReportSignature;
 use crate::sysinfo::SystemInfo;
+
+/// Paths and metadata produced by [`SessionReport::save_signed`].
+#[derive(Clone, Debug)]
+pub struct SavedReport {
+    /// The written JSON report.
+    pub json_path: PathBuf,
+    /// The detached Ed25519 signature sidecar.
+    pub sig_path: PathBuf,
+    /// Short fingerprint of the signing public key, for display.
+    pub key_fingerprint: String,
+}
 
 /// The auditable record of a whole wipe session: tool, host, and every job.
 #[derive(Clone, Debug, Serialize)]
@@ -52,6 +64,30 @@ impl SessionReport {
         let path = dir.join(format!("dban-report-{}.json", self.created_unix));
         std::fs::write(&path, self.to_json())?;
         Ok(path)
+    }
+
+    /// Write the report and a detached Ed25519 signature sidecar
+    /// (`<report>.sig`). The signature covers the exact bytes of the JSON file,
+    /// so any later edit is detectable. Returns both paths and the key
+    /// fingerprint.
+    pub fn save_signed(&self, dir: &Path) -> io::Result<SavedReport> {
+        let json = self.to_json();
+        let json_path = dir.join(format!("dban-report-{}.json", self.created_unix));
+        std::fs::write(&json_path, &json)?;
+
+        let file_name = json_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let sig = ReportSignature::create(&file_name, json.as_bytes());
+        let sig_path = dir.join(format!("dban-report-{}.json.sig", self.created_unix));
+        std::fs::write(&sig_path, sig.to_json())?;
+
+        Ok(SavedReport {
+            json_path,
+            sig_path,
+            key_fingerprint: sig.fingerprint(),
+        })
     }
 
     /// True when every job in the session completed successfully.
@@ -124,5 +160,38 @@ mod tests {
         assert!(ok.all_succeeded());
         let bad = SessionReport::new(host, true, vec![dummy_job(JobStatus::VerifyFailed)]);
         assert!(!bad.all_succeeded());
+    }
+
+    #[test]
+    fn signed_report_writes_verifiable_sidecar() {
+        use crate::signing::ReportSignature;
+        let dir = tempfile::tempdir().unwrap();
+        let report = SessionReport::new(
+            crate::sysinfo::collect(),
+            true,
+            vec![dummy_job(JobStatus::Success)],
+        );
+        let saved = report.save_signed(dir.path()).unwrap();
+        assert!(saved.json_path.exists());
+        assert!(saved.sig_path.exists());
+        assert_eq!(saved.key_fingerprint.len(), 16);
+
+        // The sidecar must verify against the exact written report bytes...
+        let bytes = std::fs::read(&saved.json_path).unwrap();
+        let sig_json = std::fs::read_to_string(&saved.sig_path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&sig_json).unwrap();
+        let sig = ReportSignature {
+            algorithm: "Ed25519",
+            signed_file: v["signed_file"].as_str().unwrap().to_string(),
+            public_key: v["public_key"].as_str().unwrap().to_string(),
+            signature: v["signature"].as_str().unwrap().to_string(),
+            note: "",
+        };
+        assert!(sig.verify(&bytes), "sidecar must verify the report");
+
+        // ...and fail if the report is altered afterwards.
+        let mut tampered = bytes.clone();
+        tampered[0] ^= 0x01;
+        assert!(!sig.verify(&tampered));
     }
 }

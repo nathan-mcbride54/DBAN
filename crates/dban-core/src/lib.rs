@@ -22,6 +22,7 @@ pub mod firmware;
 pub mod prng;
 pub mod report;
 pub mod safety;
+pub mod signing;
 pub mod sysinfo;
 
 #[cfg(target_os = "linux")]

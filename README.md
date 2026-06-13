@@ -6,33 +6,61 @@ UI, shows you the hardware and disks in the machine, and sanitizes the ones you
 explicitly choose — by software overwrite (every major published standard) or
 by drive-internal firmware erase (ATA Secure Erase, NVMe Format / Sanitize).
 
+**Selecting disks and a method:**
+
 ```
- DBAN  secure disk sanitization              8 cores │ 32 GB │ Linux 6.6
-────────────────────────────────────────────────────────────────────────────
- ╭ Disks ───────────────────────────────────────────────────────────────────╮
- │     DEVICE     MODEL                       SIZE   BUS    TYPE  STATE       │
- │▌█  nvme0n1     Samsung SSD 980 PRO       1.0 TB   NVMe   SSD   WILL ERASE  │
- │    sda         Seagate Barracuda ST2000  2.0 TB   SATA   HDD   ready       │
- │ ▒  sdb         DBAN boot medium        32.0 GB   USB    SSD   boot medium │
- ╰───────────────────────────────────────────────────────────────────────────╯
- ╭ Method ──────────────────────────────────────────────────────────────────╮
- │ ‹ NIST 800-88 Clear ›   1/17   1 pass(es)    RECOMMENDED                   │
- │ Single verified zero overwrite. The modern industry baseline.             │
- │ verify [last pass]  rounds [1]  final blank [off]    1 write pass(es)      │
- ╰───────────────────────────────────────────────────────────────────────────╯
-  up/dn move   spc select   </> method   v verify   +/- rounds   s START   q quit
+ DBAN  secure disk sanitization                  8 cores │ 32 GB │ Linux 6.6
+ ───────────────────────────────────────────────────────────────────────────
+ ╭─ Disks ─────────────────────────────────────────────────────────────────────╮
+ │     DEVICE     MODEL                       SIZE  BUS  TYPE STATE            │
+ │ ▌ █ nvme0n1    Samsung SSD 990 PRO       2.0 TB  NVMe SSD  WILL ERASE       │
+ │     sda        Seagate IronWolf          8.0 TB  SATA HDD  ready            │
+ │   ▒ sdb        Kingston DataTraveler    64.0 GB  USB  SSD  boot medium      │
+ ╰─────────────────────────────────────────────────────────────────────────────╯
+ ╭─ Method ────────────────────────────────────────────────────────────────────╮
+ │ ‹ NIST 800-88 Clear ›   1/19   1 pass(es)    RECOMMENDED                    │
+ │ Single verified zero overwrite. The modern industry baseline.               │
+ │ verify [last pass]  rounds [1]  final blank [off]    1 write pass(es)       │
+ ╰─────────────────────────────────────────────────────────────────────────────╯
+  up/dn move  spc select  </> method  v verify  +/- rounds  s START  q quit
 ```
 
-The cursor row carries a `▌` bar; a `█` marks a disk that will be erased.
-On a desktop terminal the UI is rendered in 24-bit color; on the bare Linux
-console it falls back to a 16-color, ASCII-only theme automatically.
+The cursor row carries a `▌` bar; a `█` marks a disk that will be erased, `▒`
+a locked disk. On a desktop terminal the UI renders in 24-bit color; on the
+bare Linux console it falls back to a 16-color, ASCII-only theme automatically.
+
+**Wiping in parallel — one gauge per disk, live throughput and ETA:**
+
+```
+ ╭─ Erasing ───────────────────────────────────────────────────────────────────╮
+ │ ⠻    nvme0n1   pass 1/1   zeros (0x00)   writing   1620 MB/s   ETA 21m08s   │
+ │ ████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    47.3 %      │
+ │                                                                             │
+ │ done sda       pass 3/3   random         done       198 MB/s   ETA --       │
+ │ ████████████████████████████████████████████████████████████   100.0 %      │
+ ╰─────────────────────────────────────────────────────────────────────────────╯
+  up/dn select   c cancel   ? help   q quit
+```
+
+**Signed results, ready to archive:**
+
+```
+ ╭─ COMPLETE ──────────────────────────────────────────────────────────────────╮
+ │ DEVICE     MODEL                 RESULT   METHOD            PASS       RATE │
+ │ nvme0n1    Samsung SSD 990 PRO   SUCCESS  NIST 800-88 Clear 1/1    1.6 GB/s │
+ │ sda        Seagate IronWolf      SUCCESS  DoD 5220.22-M (E) 3/3    198 MB/s │
+ │                                                                             │
+ │ Report written  /tmp/dban-report-1781299245.json  (Ed25519 signed)          │
+ ╰─────────────────────────────────────────────────────────────────────────────╯
+  w report   n new   r reboot   p power off
+```
 
 > ⚠️ **DBAN permanently destroys data. There is no undo.** Read
 > [Safety design](#safety-design) before using it on real hardware.
 
 ---
 
-## Why
+## Genesis
 
 The classic boot-and-nuke disk erasers are unmaintained, don't understand
 NVMe, have dated UIs, and are written in C. DBAN is:
@@ -60,17 +88,6 @@ NVMe, have dated UIs, and are written in C. DBAN is:
   color palette — degrading automatically to a 16-color, ASCII-glyph theme on
   the bare Linux console. Every rendered glyph is exactly one column wide, so
   borders never drift regardless of terminal font (regression-tested).
-
-### "Is this really an OS from scratch?"
-
-Honest answer: **no, and that is the right call.** A from-scratch kernel would
-have to reimplement AHCI, NVMe, USB-storage, SATA port multipliers, RAID/dm,
-and filesystem detection before it could erase a single real disk — years of
-work to *worse* hardware support than Linux gives you for free. So DBAN takes
-the pragmatic "purpose-built OS" path: the Linux kernel for drivers, and
-*nothing else* in userland but DBAN. The result boots in seconds and behaves
-like a single-purpose appliance, which is what you actually want from a nuke
-tool.
 
 ---
 
@@ -228,6 +245,17 @@ hardware, and per-disk records (model, serial, method id/name, whether it was a
 firmware erase, passes completed, status, duration, throughput, and any
 verification failure with its byte offset). On the appliance it lands in
 `/tmp`; hosted, in the working directory.
+
+### Tamper-evident signing
+
+Alongside the report, DBAN writes a detached **Ed25519 signature** sidecar
+(`dban-report-<ts>.json.sig`) containing the public key and a signature over the
+exact bytes of the report. Any later edit to the report invalidates the
+signature, so the artifact is tamper-evident. The signing key is generated fresh
+per session from OS entropy — proving the file is unaltered since it was written,
+without DBAN holding long-lived secrets on a live boot medium. The sidecar is
+plain JSON; verify it with any Ed25519 implementation using the embedded
+`public_key`.
 
 ---
 

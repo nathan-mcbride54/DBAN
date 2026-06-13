@@ -614,12 +614,20 @@ fn draw_summary(f: &mut Frame, app: &App, t: &Theme, area: Rect) {
     );
 
     let footer = match &app.saved_report_path {
-        Some(path) => Line::from(vec![
-            Span::styled("Report written  ", t.ok()),
-            Span::styled(path.clone(), t.muted()),
-        ]),
+        Some(path) => {
+            let mut spans = vec![
+                Span::styled("Report written  ", t.ok()),
+                Span::styled(path.clone(), t.muted()),
+            ];
+            if let Some(fp) = &app.saved_report_fingerprint {
+                spans.push(Span::raw("   "));
+                spans.push(Span::styled(" Ed25519 signed ", t.badge(t.p.ok)));
+                spans.push(Span::styled(format!(" key {fp}…"), t.faint()));
+            }
+            Line::from(spans)
+        }
         None => Line::from(Span::styled(
-            "Press w to write a JSON erasure report.",
+            "Press w to write a signed (Ed25519) JSON erasure report.",
             t.muted(),
         )),
     };

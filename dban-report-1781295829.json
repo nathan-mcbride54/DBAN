@@ -1,0 +1,35 @@
+{
+  "tool": "dban",
+  "tool_version": "0.1.0",
+  "created_unix": 1781295829,
+  "simulation": true,
+  "host": {
+    "cpu_model": "windows host",
+    "cpu_cores": 16,
+    "mem_total_bytes": 0,
+    "kernel": "windows (simulation host)"
+  },
+  "jobs": [
+    {
+      "disk_name": "nvme0n1",
+      "disk_model": "Samsung SSD 980 PRO (sim)",
+      "disk_serial": "S5GXDEMO",
+      "disk_size_bytes": 402653184,
+      "method_id": "nist-clear",
+      "method_name": "NIST 800-88 Clear",
+      "firmware": false,
+      "rounds": 1,
+      "verify": "AllPasses",
+      "pass_count": 1,
+      "passes_completed": 1,
+      "status": "Success",
+      "error": null,
+      "started_unix": 1781295822,
+      "finished_unix": 1781295829,
+      "duration_secs": 7.0516171,
+      "bytes_written": 402653184,
+      "bytes_verified": 402653184,
+      "avg_write_mib_s": 107.87108023813327
+    }
+  ]
+}

@@ -157,6 +157,8 @@ pub struct App {
     pub session_report: Option<SessionReport>,
     /// Path of the written report, if saved.
     pub saved_report_path: Option<String>,
+    /// Fingerprint of the Ed25519 key that signed the saved report.
+    pub saved_report_fingerprint: Option<String>,
 
     /// Transient status message and when it was set.
     pub status: Option<(String, Instant)>,
@@ -218,6 +220,7 @@ impl App {
             trackers: Vec::new(),
             session_report: None,
             saved_report_path: None,
+            saved_report_fingerprint: None,
             status: None,
             show_help: false,
             confirm_quit: false,
@@ -523,6 +526,7 @@ impl App {
                 self.selected.clear();
                 self.session_report = None;
                 self.saved_report_path = None;
+                self.saved_report_fingerprint = None;
                 self.cursor = 0;
                 self.refresh_disks();
                 self.screen = Screen::Disks;
@@ -688,11 +692,15 @@ impl App {
         } else {
             std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
         };
-        match report.save_json(&dir) {
-            Ok(path) => {
-                let shown = path.display().to_string();
+        match report.save_signed(&dir) {
+            Ok(saved) => {
+                let shown = saved.json_path.display().to_string();
                 self.saved_report_path = Some(shown.clone());
-                self.flash(format!("report saved to {shown}"));
+                self.saved_report_fingerprint = Some(saved.key_fingerprint.clone());
+                self.flash(format!(
+                    "report + Ed25519 signature saved to {shown} (key {})",
+                    saved.key_fingerprint
+                ));
             }
             Err(e) => self.flash(format!("could not save report: {e}")),
         }
