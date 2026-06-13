@@ -7,3 +7,5 @@
 # Erasure reports + signatures produced by running DBAN in this directory.
 dban-report-*.json
 dban-report-*.json.sig
+# Local ISO build logs.
+*.log
