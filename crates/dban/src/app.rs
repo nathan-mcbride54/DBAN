@@ -195,6 +195,7 @@ impl App {
             FirmwareMethod::NvmeFormat { crypto: true },
             FirmwareMethod::NvmeSanitize { crypto: false },
             FirmwareMethod::NvmeSanitize { crypto: true },
+            FirmwareMethod::TcgRevert,
         ] {
             methods.push(MethodChoice::Firmware(fw));
         }

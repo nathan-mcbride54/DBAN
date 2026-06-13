@@ -193,12 +193,21 @@ Random passes are verified without buffering: the engine records each pass's
 | NVMe Format (crypto) | NVMe | `Format NVM` discarding the media key (SES=2) — instant |
 | NVMe Sanitize (block) | NVMe | strongest NVMe purge across the whole subsystem |
 | NVMe Sanitize (crypto) | NVMe | crypto-erase across the whole subsystem |
+| TCG Opal Crypto-Erase | SATA / NVMe | revert a self-encrypting drive to factory state, destroying the media key |
 
 DBAN probes each disk's support **non-destructively** (ATA `IDENTIFY`, NVMe
-Identify Controller) and only targets disks the chosen command can actually
-run; others in the selection are shown as `skip (n/a)` and left untouched. On
-real hardware these commands report no progress, so the UI shows an
-indeterminate pulse; the report records exactly which command ran.
+Identify Controller, TCG Level 0 Discovery) and only targets disks the chosen
+command can actually run; others in the selection are shown as `skip (n/a)` and
+left untouched. On real hardware these commands report no progress, so the UI
+shows an indeterminate pulse; the report records exactly which command ran.
+
+### Hidden sectors (HPA/DCO)
+
+ATA drives can hide capacity behind a **Host Protected Area** or **Device
+Configuration Overlay**, so a naive overwrite misses the top of the disk. DBAN
+detects these (non-destructively) and flags the disk as `hidden area` with its
+size shown in amber. Press **`h`** to remove the HPA/DCO (`SET MAX ADDRESS` /
+`DEVICE CONFIGURATION RESTORE`) so the wipe then covers the entire drive.
 
 ### A word on SSDs
 

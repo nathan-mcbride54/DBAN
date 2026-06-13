@@ -93,7 +93,7 @@ fn toggle(app: &mut App, name: &str) {
 fn firmware_methods_are_offered() {
     let app = app();
     let fw = app.methods.iter().filter(|m| m.is_firmware()).count();
-    assert_eq!(fw, 6, "all six firmware methods should be in the picker");
+    assert_eq!(fw, 7, "all seven firmware methods should be in the picker");
 }
 
 #[test]

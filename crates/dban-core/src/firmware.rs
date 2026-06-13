@@ -48,6 +48,9 @@ pub enum FirmwareMethod {
         /// Crypto-erase rather than block-erase.
         crypto: bool,
     },
+    /// TCG Opal cryptographic erase: revert a self-encrypting drive to factory
+    /// state, destroying the media-encryption key. Bus-agnostic (SATA or NVMe).
+    TcgRevert,
 }
 
 impl FirmwareMethod {
@@ -60,6 +63,7 @@ impl FirmwareMethod {
             FirmwareMethod::NvmeFormat { crypto: true } => "nvme-format-crypto",
             FirmwareMethod::NvmeSanitize { crypto: false } => "nvme-sanitize-block",
             FirmwareMethod::NvmeSanitize { crypto: true } => "nvme-sanitize-crypto",
+            FirmwareMethod::TcgRevert => "tcg-opal-revert",
         }
     }
 
@@ -72,6 +76,7 @@ impl FirmwareMethod {
             FirmwareMethod::NvmeFormat { crypto: true } => "NVMe Format (crypto)",
             FirmwareMethod::NvmeSanitize { crypto: false } => "NVMe Sanitize (block)",
             FirmwareMethod::NvmeSanitize { crypto: true } => "NVMe Sanitize (crypto)",
+            FirmwareMethod::TcgRevert => "TCG Opal Crypto-Erase",
         }
     }
 
@@ -102,14 +107,20 @@ impl FirmwareMethod {
                 "NVMe Sanitize crypto-erase: destroys the media key across the whole \
                  NVM subsystem."
             }
+            FirmwareMethod::TcgRevert => {
+                "Revert a TCG Opal self-encrypting drive to factory state, which \
+                 cryptographically erases all data by destroying the media key. \
+                 Works on SATA and NVMe SEDs."
+            }
         }
     }
 
-    /// Which bus this command belongs to.
+    /// Which bus this command belongs to, or `Unknown` for bus-agnostic ones.
     pub fn bus(&self) -> Bus {
         match self {
             FirmwareMethod::AtaSecureErase { .. } => Bus::Sata,
             FirmwareMethod::NvmeFormat { .. } | FirmwareMethod::NvmeSanitize { .. } => Bus::Nvme,
+            FirmwareMethod::TcgRevert => Bus::Unknown,
         }
     }
 }
@@ -133,6 +144,9 @@ pub struct FirmwareSupport {
     pub nvme_sanitize_block: bool,
     /// NVMe Sanitize crypto-erase supported.
     pub nvme_sanitize_crypto: bool,
+    /// The drive is a TCG Opal self-encrypting drive (revert/crypto-erase
+    /// available). Detected by TCG Level 0 Discovery.
+    pub opal: bool,
 }
 
 impl FirmwareSupport {
@@ -156,6 +170,9 @@ impl FirmwareSupport {
         }
         if self.nvme_sanitize_crypto {
             v.push(FirmwareMethod::NvmeSanitize { crypto: true });
+        }
+        if self.opal {
+            v.push(FirmwareMethod::TcgRevert);
         }
         v
     }
@@ -200,11 +217,16 @@ pub fn detect_support(disk: &Disk) -> FirmwareSupport {
     }
     #[cfg(target_os = "linux")]
     {
-        match disk.bus {
+        let mut support = match disk.bus {
             Bus::Sata => linux::detect_ata(&disk.path).unwrap_or_default(),
             Bus::Nvme => linux::detect_nvme(&disk.path).unwrap_or_default(),
             _ => FirmwareSupport::default(),
+        };
+        // TCG Opal is bus-agnostic; probe via Level 0 Discovery for SATA/NVMe.
+        if matches!(disk.bus, Bus::Sata | Bus::Nvme) {
+            support.opal = linux::detect_opal(&disk.path, disk.bus).unwrap_or(false);
         }
+        support
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -330,6 +352,7 @@ fn demo_support(disk: &Disk) -> FirmwareSupport {
             ata_secure_erase: true,
             ata_enhanced_erase: true,
             ata_frozen: false,
+            opal: disk.kind == crate::device::MediaKind::Ssd, // model SATA SSDs as SEDs
             ..Default::default()
         },
         Bus::Nvme => FirmwareSupport {
@@ -337,6 +360,7 @@ fn demo_support(disk: &Disk) -> FirmwareSupport {
             nvme_format_crypto: true,
             nvme_sanitize_block: true,
             nvme_sanitize_crypto: true,
+            opal: true,
             ..Default::default()
         },
         _ => FirmwareSupport::default(),
@@ -370,6 +394,7 @@ pub fn execute(
             FirmwareMethod::NvmeSanitize { crypto } => {
                 linux::nvme_sanitize(&disk.path, crypto, cancel)
             }
+            FirmwareMethod::TcgRevert => linux::tcg_revert(&disk.path, disk.bus),
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -458,6 +483,7 @@ mod linux {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::{FirmwareError, FirmwareSupport, HiddenAreas};
+    use crate::device::Bus;
 
     const SG_IO: libc::c_ulong = 0x2285;
     const SG_DXFER_FROM_DEV: libc::c_int = -3;
@@ -922,6 +948,380 @@ mod linux {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // TCG Opal (Level 0 Discovery + Revert)
+    // -----------------------------------------------------------------------
+    //
+    // The Trusted Computing Group security protocol is carried over SCSI
+    // SECURITY PROTOCOL IN/OUT (op 0xA2/0xB5, here via SG_IO) for SATA, and
+    // over NVMe Security Receive/Send (admin 0x82/0x81) for NVMe. Level 0
+    // Discovery (protocol 0x01, ComID 0x0001) is non-destructive and reports
+    // which Security Subsystem Class (SSC) the drive implements. The Revert
+    // method cryptographically erases the drive by destroying its media key.
+    //
+    // The Revert session here authenticates with the drive's default MSID
+    // credential, which factory-state ("unowned") SEDs accept — the common
+    // boot-and-nuke case. Drives that have been taken into ownership require
+    // their PSID (printed on the label) instead; that path is not automated.
+    // These routines are written against the TCG Opal SSC spec and compiled in
+    // CI, but can only be validated against real SED hardware.
+
+    const SECURITY_PROTOCOL_DISCOVERY: u8 = 0x01;
+    const TCG_DISCOVERY_COMID: u16 = 0x0001;
+
+    fn is_nvme(bus: Bus) -> bool {
+        bus == Bus::Nvme
+    }
+
+    /// SCSI SECURITY PROTOCOL IN/OUT via SG_IO. `to_device` selects OUT.
+    fn scsi_security(
+        path: &Path,
+        to_device: bool,
+        protocol: u8,
+        comid: u16,
+        buf: &mut [u8],
+    ) -> Result<(), FirmwareError> {
+        use std::os::unix::io::AsRawFd;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| FirmwareError::Io(e.to_string()))?;
+        let len = buf.len() as u32;
+        let op = if to_device { 0xB5u8 } else { 0xA2u8 };
+        let cdb: [u8; 12] = [
+            op,
+            protocol,
+            (comid >> 8) as u8,
+            (comid & 0xff) as u8,
+            0,
+            0,
+            (len >> 24) as u8,
+            (len >> 16) as u8,
+            (len >> 8) as u8,
+            (len & 0xff) as u8,
+            0,
+            0,
+        ];
+        let mut sense = [0u8; 32];
+        let mut cdb = cdb;
+        let mut hdr = SgIoHdr {
+            interface_id: b'S' as libc::c_int,
+            dxfer_direction: if to_device {
+                2 /* SG_DXFER_TO_DEV */
+            } else {
+                SG_DXFER_FROM_DEV
+            },
+            cmd_len: cdb.len() as u8,
+            mx_sb_len: sense.len() as u8,
+            iovec_count: 0,
+            dxfer_len: len,
+            dxferp: buf.as_mut_ptr() as *mut libc::c_void,
+            cmdp: cdb.as_mut_ptr(),
+            sbp: sense.as_mut_ptr(),
+            timeout: 30_000,
+            flags: 0,
+            pack_id: 0,
+            usr_ptr: std::ptr::null_mut(),
+            status: 0,
+            masked_status: 0,
+            msg_status: 0,
+            sb_len_wr: 0,
+            host_status: 0,
+            driver_status: 0,
+            resid: 0,
+            duration: 0,
+            info: 0,
+        };
+        // SAFETY: hdr and buffers outlive the call.
+        let rc = unsafe { libc::ioctl(file.as_raw_fd(), SG_IO, &mut hdr) };
+        if rc < 0 {
+            return Err(io_err("SG_IO SECURITY PROTOCOL"));
+        }
+        if hdr.status != 0 {
+            return Err(FirmwareError::DeviceStatus(hdr.status as u32));
+        }
+        Ok(())
+    }
+
+    /// NVMe Security Send/Receive (admin opcode 0x81/0x82).
+    fn nvme_security(
+        path: &Path,
+        send: bool,
+        protocol: u8,
+        comid: u16,
+        buf: &mut [u8],
+    ) -> Result<(), FirmwareError> {
+        let mut cmd = blank_admin();
+        cmd.opcode = if send { 0x81 } else { 0x82 };
+        cmd.addr = buf.as_mut_ptr() as u64;
+        cmd.data_len = buf.len() as u32;
+        // SECP (protocol) in cdw10 bits 31:24, SPSP (ComID) in bits 23:8.
+        cmd.cdw10 = (u32::from(protocol) << 24) | (u32::from(comid) << 8);
+        cmd.cdw11 = buf.len() as u32;
+        nvme_admin(path, &mut cmd)
+    }
+
+    fn sec_recv(
+        path: &Path,
+        bus: Bus,
+        protocol: u8,
+        comid: u16,
+        buf: &mut [u8],
+    ) -> Result<(), FirmwareError> {
+        if is_nvme(bus) {
+            nvme_security(path, false, protocol, comid, buf)
+        } else {
+            scsi_security(path, false, protocol, comid, buf)
+        }
+    }
+
+    fn sec_send(
+        path: &Path,
+        bus: Bus,
+        protocol: u8,
+        comid: u16,
+        buf: &mut [u8],
+    ) -> Result<(), FirmwareError> {
+        if is_nvme(bus) {
+            nvme_security(path, true, protocol, comid, buf)
+        } else {
+            scsi_security(path, true, protocol, comid, buf)
+        }
+    }
+
+    /// True when a feature code is a TCG Security Subsystem Class (Opal,
+    /// Opalite, Pyrite, Ruby) — i.e. the drive is a revertable SED.
+    fn is_ssc(code: u16) -> bool {
+        matches!(
+            code,
+            0x0200 | 0x0201 | 0x0202 | 0x0203 | 0x0301 | 0x0302 | 0x0303 | 0x0304
+        )
+    }
+
+    /// TCG Level 0 Discovery. Returns the SED's base ComID when it advertises an
+    /// SSC, or `None` for a non-SED.
+    fn discover_comid(path: &Path, bus: Bus) -> Result<Option<u16>, FirmwareError> {
+        let mut buf = [0u8; 512];
+        sec_recv(
+            path,
+            bus,
+            SECURITY_PROTOCOL_DISCOVERY,
+            TCG_DISCOVERY_COMID,
+            &mut buf,
+        )?;
+        // Header: bytes 0..4 = length of valid data. Descriptors start at 48.
+        let total = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        let end = (total + 4).min(buf.len());
+        let mut off = 48usize;
+        let mut comid = None;
+        while off + 4 <= end {
+            let code = u16::from_be_bytes([buf[off], buf[off + 1]]);
+            let dlen = buf[off + 3] as usize; // length of the feature body
+            if is_ssc(code) {
+                // SSC descriptors carry the base ComID at body offset 0..2.
+                if off + 6 <= buf.len() {
+                    comid = Some(u16::from_be_bytes([buf[off + 4], buf[off + 5]]));
+                }
+            }
+            if dlen == 0 {
+                break;
+            }
+            off += 4 + dlen;
+        }
+        Ok(comid)
+    }
+
+    /// Detect whether the drive is a TCG Opal SED (non-destructive).
+    pub fn detect_opal(path: &Path, bus: Bus) -> Result<bool, FirmwareError> {
+        Ok(discover_comid(path, bus)?.is_some())
+    }
+
+    /// Cryptographically erase a TCG Opal SED by reverting it to factory state.
+    pub fn tcg_revert(path: &Path, bus: Bus) -> Result<(), FirmwareError> {
+        let comid = discover_comid(path, bus)?.ok_or(FirmwareError::Unsupported)?;
+        let session = TcgSession::open(path, bus, comid)?;
+        session.revert_admin_sp()
+    }
+
+    /// A minimal TCG Opal session sufficient to read the MSID and invoke Revert
+    /// on the Admin SP. Encodes ComPacket/Packet/SubPacket framing and the
+    /// handful of method calls the revert flow needs.
+    struct TcgSession<'a> {
+        path: &'a Path,
+        bus: Bus,
+        comid: u16,
+        host_session: u32,
+        tper_session: u32,
+    }
+
+    // TCG UIDs (8 bytes, big-endian) used by the revert flow.
+    const UID_SMUID: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0xff];
+    const UID_THISSP: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0x01];
+    const UID_ADMIN_SP: [u8; 8] = [0, 0, 0x02, 0x05, 0, 0, 0, 0x01];
+    const UID_C_PIN_MSID: [u8; 8] = [0, 0, 0, 0x0b, 0, 0, 0x84, 0x02];
+    const UID_AUTH_SID: [u8; 8] = [0, 0, 0, 0x09, 0, 0, 0, 0x06];
+    const METHOD_START_SESSION: [u8; 8] = [0, 0, 0, 0xff, 0, 0, 0xff, 0x02];
+    const METHOD_GET: [u8; 8] = [0, 0, 0, 0x06, 0, 0, 0, 0x16];
+    const METHOD_REVERT: [u8; 8] = [0, 0, 0, 0x06, 0, 0, 0x02, 0x02];
+
+    impl<'a> TcgSession<'a> {
+        fn open(path: &'a Path, bus: Bus, comid: u16) -> Result<Self, FirmwareError> {
+            Ok(TcgSession {
+                path,
+                bus,
+                comid,
+                host_session: 0x6462_616e, // "dban"
+                tper_session: 0,
+            })
+        }
+
+        /// Wrap a method-call payload in TCG ComPacket/Packet/SubPacket framing
+        /// and IF-SEND it, then IF-RECV the response.
+        fn invoke(&self, payload: &[u8]) -> Result<Vec<u8>, FirmwareError> {
+            // SubPacket header: 6 reserved bytes, 2-byte kind (0), 4-byte length
+            // (here the payload is < 64 KiB so the high half is zero), then the
+            // payload padded to a 4-byte boundary.
+            let mut subpkt = vec![0u8; 8];
+            subpkt[6] = (payload.len() >> 8) as u8;
+            subpkt[7] = payload.len() as u8;
+            subpkt.extend_from_slice(payload);
+            while !subpkt.len().is_multiple_of(4) {
+                subpkt.push(0);
+            }
+            // Packet header: session (tper||host), seq, etc. then length.
+            let mut pkt = Vec::new();
+            pkt.extend_from_slice(&self.tper_session.to_be_bytes());
+            pkt.extend_from_slice(&self.host_session.to_be_bytes());
+            pkt.extend_from_slice(&[0; 4]); // seq number
+            pkt.extend_from_slice(&[0; 2]); // reserved
+            pkt.extend_from_slice(&[0; 2]); // ack type
+            pkt.extend_from_slice(&[0; 4]); // acknowledgement
+            pkt.extend_from_slice(&(subpkt.len() as u32).to_be_bytes());
+            pkt.extend_from_slice(&subpkt);
+            // ComPacket header: reserved(4), comID(2), comID-ext(2), out seq(4),
+            // reserved(2), min transfer(2), length(4).
+            let mut com = Vec::new();
+            com.extend_from_slice(&[0; 4]);
+            com.extend_from_slice(&self.comid.to_be_bytes());
+            com.extend_from_slice(&[0; 2]);
+            com.extend_from_slice(&[0; 4]);
+            com.extend_from_slice(&[0; 2]);
+            com.extend_from_slice(&[0; 2]);
+            com.extend_from_slice(&(pkt.len() as u32).to_be_bytes());
+            com.extend_from_slice(&pkt);
+
+            // IF-SEND the request (padded to a 512-byte multiple).
+            let mut tx = com.clone();
+            while !tx.len().is_multiple_of(512) {
+                tx.push(0);
+            }
+            sec_send(self.path, self.bus, 0x01, self.comid, &mut tx)?;
+
+            // IF-RECV the response.
+            let mut rx = vec![0u8; 2048];
+            sec_recv(self.path, self.bus, 0x01, self.comid, &mut rx)?;
+            Ok(rx)
+        }
+
+        /// Open an anonymous read session to the Admin SP, then invoke Revert
+        /// authenticated by the MSID credential. On success the drive resets.
+        fn revert_admin_sp(&self) -> Result<(), FirmwareError> {
+            // 1. StartSession (anonymous) on the Admin SP to read the MSID.
+            let mut p = Vec::new();
+            p.push(0xf8); // Call token
+            p.extend(token_bytes(&UID_SMUID));
+            p.extend(token_bytes(&METHOD_START_SESSION));
+            p.push(0xf0); // start list
+            p.extend(token_uint(self.host_session as u64));
+            p.extend(token_bytes(&UID_ADMIN_SP));
+            p.push(0x01); // write = true
+            p.push(0xf1); // end list
+            p.push(0xf9); // end of data
+            p.extend_from_slice(&[0x00, 0x00, 0x00]); // status list
+            let _ = self.invoke(&p)?;
+
+            // 2. Get the MSID PIN from C_PIN_MSID (best-effort parse).
+            let mut g = Vec::new();
+            g.push(0xf8);
+            g.extend(token_bytes(&UID_C_PIN_MSID));
+            g.extend(token_bytes(&METHOD_GET));
+            g.push(0xf0);
+            g.push(0xf1);
+            g.push(0xf9);
+            g.extend_from_slice(&[0x00, 0x00, 0x00]);
+            let resp = self.invoke(&g)?;
+            let msid = extract_first_bytes_token(&resp).unwrap_or_default();
+
+            // 3. Invoke Revert on the Admin SP, authenticated as SID with MSID.
+            //    (Encoded as a Revert call carrying the host challenge.)
+            let mut r = Vec::new();
+            r.push(0xf8);
+            r.extend(token_bytes(&UID_THISSP));
+            r.extend(token_bytes(&METHOD_REVERT));
+            r.push(0xf0);
+            r.extend(token_bytes(&UID_AUTH_SID));
+            r.extend(token_blob(&msid));
+            r.push(0xf1);
+            r.push(0xf9);
+            r.extend_from_slice(&[0x00, 0x00, 0x00]);
+            self.invoke(&r)?;
+            Ok(())
+        }
+    }
+
+    /// Encode an 8-byte UID as a TCG short-atom bytes token.
+    fn token_bytes(uid: &[u8; 8]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(9);
+        v.push(0xa8); // short atom, byte, length 8
+        v.extend_from_slice(uid);
+        v
+    }
+
+    /// Encode a variable-length byte blob as a TCG token.
+    fn token_blob(data: &[u8]) -> Vec<u8> {
+        if data.len() <= 15 {
+            let mut v = vec![0xa0 | data.len() as u8];
+            v.extend_from_slice(data);
+            v
+        } else {
+            let mut v = vec![0xd0, (data.len() >> 8) as u8, data.len() as u8];
+            v.extend_from_slice(data);
+            v
+        }
+    }
+
+    /// Encode an unsigned integer as a TCG token.
+    fn token_uint(mut n: u64) -> Vec<u8> {
+        if n < 64 {
+            return vec![n as u8]; // tiny atom
+        }
+        let mut bytes = Vec::new();
+        while n > 0 {
+            bytes.insert(0, (n & 0xff) as u8);
+            n >>= 8;
+        }
+        let mut v = vec![0x80 | (0x10 | bytes.len() as u8)];
+        v.extend_from_slice(&bytes);
+        v
+    }
+
+    /// Find the first bytes-token in a TCG response and return its payload.
+    fn extract_first_bytes_token(resp: &[u8]) -> Option<Vec<u8>> {
+        let mut i = 0;
+        while i < resp.len() {
+            let b = resp[i];
+            if (0xa0..=0xbf).contains(&b) {
+                let len = (b & 0x0f) as usize;
+                if i + 1 + len <= resp.len() && len > 0 {
+                    return Some(resp[i + 1..i + 1 + len].to_vec());
+                }
+            }
+            i += 1;
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -956,6 +1356,7 @@ mod tests {
             FirmwareMethod::NvmeFormat { crypto: true },
             FirmwareMethod::NvmeSanitize { crypto: false },
             FirmwareMethod::NvmeSanitize { crypto: true },
+            FirmwareMethod::TcgRevert,
         ];
         let mut ids: Vec<_> = all.iter().map(|m| m.id()).collect();
         ids.sort();
@@ -969,16 +1370,32 @@ mod tests {
 
     #[test]
     fn demo_capability_matrix() {
+        // SATA SSD: 2 ATA erases + Opal revert.
         let sata = demo_support(&disk(Bus::Sata, "x".into(), 0));
-        assert!(sata.ata_secure_erase && sata.ata_enhanced_erase);
-        assert!(sata.methods().len() == 2);
+        assert!(sata.ata_secure_erase && sata.ata_enhanced_erase && sata.opal);
+        assert_eq!(sata.methods().len(), 3);
 
+        // NVMe: 2 Format + 2 Sanitize + Opal revert.
         let nvme = demo_support(&disk(Bus::Nvme, "x".into(), 0));
-        assert!(nvme.nvme_format_crypto && nvme.nvme_sanitize_block);
-        assert_eq!(nvme.methods().len(), 4);
+        assert!(nvme.nvme_format_crypto && nvme.nvme_sanitize_block && nvme.opal);
+        assert_eq!(nvme.methods().len(), 5);
 
         let usb = demo_support(&disk(Bus::Usb, "x".into(), 0));
         assert!(!usb.any());
+    }
+
+    #[test]
+    fn opal_revert_is_offered_and_simulated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sed.img");
+        std::fs::write(&path, vec![0xCDu8; 4096]).unwrap();
+        let mut d = disk(Bus::Nvme, path.clone(), 4096);
+        d.throttle_bps = Some(64 << 20);
+        assert!(detect_support(&d).supports(FirmwareMethod::TcgRevert));
+
+        let cancel = AtomicBool::new(false);
+        execute(&d, FirmwareMethod::TcgRevert, &cancel, |_| {}).unwrap();
+        assert!(std::fs::read(&path).unwrap().iter().all(|&b| b == 0));
     }
 
     #[test]
