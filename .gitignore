@@ -4,3 +4,6 @@
 *.iso
 .DS_Store
 .claude/
+# Erasure reports + signatures produced by running DBAN in this directory.
+dban-report-*.json
+dban-report-*.json.sig
